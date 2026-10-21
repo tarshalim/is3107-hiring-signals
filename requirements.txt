@@ -1,0 +1,4 @@
+# Local dev / tests. Airflow itself runs from the Docker image.
+requests>=2.31
+psycopg2-binary>=2.9
+pytest>=8
