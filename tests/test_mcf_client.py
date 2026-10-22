@@ -39,6 +39,15 @@ def test_snapshot_dedupes_and_counts(tmp_path, monkeypatch):
     assert stats["api_total"] == 5
 
 
+def test_read_snapshot_batches(tmp_path, monkeypatch):
+    monkeypatch.setattr(mcf_client, "PAGE_SIZE", 10)
+    session = FakeSession([[{"uuid": str(i)} for i in range(5)]])
+    path = tmp_path / "s.jsonl.gz"
+    mcf_client.snapshot_to_file(path, session=session)
+    sizes = [len(b) for b in mcf_client.read_snapshot_batches(path, 2)]
+    assert sizes == [2, 2, 1]
+
+
 def test_max_pages_stops_early(tmp_path, monkeypatch):
     monkeypatch.setattr(mcf_client, "PAGE_SIZE", 1)
     session = FakeSession([[{"uuid": str(i)}] for i in range(10)])

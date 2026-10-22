@@ -93,3 +93,15 @@ def read_snapshot(path: Path):
     with gzip.open(path, "rt", encoding="utf-8") as f:
         for line in f:
             yield json.loads(line)
+
+
+def read_snapshot_batches(path: Path, size: int):
+    """Yield lists of up to `size` postings, so a large file is never fully in memory."""
+    batch = []
+    for job in read_snapshot(path):
+        batch.append(job)
+        if len(batch) == size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
