@@ -29,7 +29,7 @@ BATCH_SIZE = 1000       # rows per INSERT when loading into Postgres
 
 @dag(
     dag_id="daily_mcf_ingest",
-    schedule="0 6 * * *",  # 06:00 every day
+    schedule="0 10 * * *",  # 10:00 every day
     start_date=pendulum.datetime(2026, 10, 21, tz="Asia/Singapore"),
     catchup=False,         # past days can't be re-fetched, so never backfill
     max_active_runs=1,
