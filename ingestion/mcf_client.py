@@ -21,9 +21,12 @@ USER_AGENT = "IS3107-student-project (NUS)"
 
 def make_session() -> requests.Session:
     """A session that retries rate limits and server errors with backoff."""
+    # The API rate-limits (429) part-way through a full run, so wait up to ~6 min
+    # in total before giving up; a failed page means the whole run restarts.
     retry = Retry(
-        total=5,
-        backoff_factor=2,  # 2s, 4s, 8s, ...
+        total=8,
+        backoff_factor=5,  # 5s, 10s, 20s, 40s, 80s, then capped at backoff_max
+        backoff_max=120,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET"],
     )
@@ -39,7 +42,7 @@ def fetch_page(session: requests.Session, page: int, limit: int = PAGE_SIZE) -> 
     return resp.json()
 
 
-def iter_jobs(session: requests.Session, max_pages: int = 0, pause: float = 0.5):
+def iter_jobs(session: requests.Session, max_pages: int = 0, pause: float = 1.0):
     """Yield (page_number, api_total, jobs) for each page until the API runs out.
 
     max_pages=0 means fetch everything.
@@ -93,3 +96,15 @@ def read_snapshot(path: Path):
     with gzip.open(path, "rt", encoding="utf-8") as f:
         for line in f:
             yield json.loads(line)
+
+
+def read_snapshot_batches(path: Path, size: int):
+    """Yield lists of up to `size` postings, so a large file is never fully in memory."""
+    batch = []
+    for job in read_snapshot(path):
+        batch.append(job)
+        if len(batch) == size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
