@@ -21,7 +21,7 @@ SSOC 2020 definitions, `skill_aliases.csv`).
 cd C:\Users\bchua\Desktop\SchoolStuff\IS3107\is3107-hiring-signals
 git checkout feature/clean-and-warehouse
 pip install -r requirements.txt          # adds openpyxl and rapidfuzz
-python -m pytest -q                      # expect: 44 passed, 1 skipped (the Postgres test skips without a DSN)
+python -m pytest -q                      # expect: 45 passed, 1 skipped (the Postgres test skips without a DSN)
 python -c "import ast,sys; ast.parse(open('dags/daily_transform_dag.py',encoding='utf-8').read()); print('DAG parses')"
 ```
 
@@ -107,8 +107,8 @@ Sizes:
 ```sql
 SELECT n.nspname||'.'||c.relname, pg_size_pretty(pg_total_relation_size(c.oid)) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
 WHERE c.relkind='r' AND n.nspname IN ('raw','clean') ORDER BY pg_total_relation_size(c.oid) DESC;
--- raw.mcf_job_snapshots 947 MB; clean.dim_job 166 MB; clean.bridge_job_skill 120 MB; clean.fact_job_day 72 MB; clean.dim_skill 10 MB; rest under 1 MB
--- clean layer total: 370 MB for two days (first load, before any rerun bloat)
+-- raw.mcf_job_snapshots 947 MB; clean.dim_job 166 MB; clean.bridge_job_skill 121 MB; clean.fact_job_day 54 MB; clean.dim_skill 10 MB; rest under 1 MB
+-- clean layer total: 353 MB for two days (first load, before any rerun bloat; measured again on a fresh volume 26 Oct)
 ```
 
 Step timings as stored (not just printed):

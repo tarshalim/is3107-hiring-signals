@@ -38,7 +38,7 @@ Why star and not snowflake: the dashboard's questions are "applications per skil
 are reposted most", "do entry-level postings ask for 2+ years". Those are GROUP BY questions on a few numeric
 columns, so a fact table with foreign keys to a few wide dimensions needs few joins. Company and SSOC title are
 copied into `dim_job` on purpose (denormalised), exactly like the instructor name going straight into the course
-dimension in the workshop. Storage is tiny (the whole clean layer is 370 MB for two days), so the snowflake's only
+dimension in the workshop. Storage is tiny (the whole clean layer is about 350 MB for two days), so the snowflake's only
 benefit, less redundancy, buys nothing here. Why not one flat table: the lecturer's own answer, a database with
 B-tree indexes finds "all postings asking for skill X" without scanning everything, and the dimension rows stay
 one per posting version instead of being repeated 14.5 times per skill.
@@ -200,13 +200,13 @@ count exceeded its views, and every raw row became exactly one fact row.
 | raw.mcf_job_snapshots | 180,741 | 947 MB (JSONB in TOAST) |
 | clean.dim_job | 92,817 versions (92,772 current) | 166 MB |
 | clean.bridge_job_skill | 1,343,293 | 120 MB |
-| clean.fact_job_day | 180,741 | 72 MB |
+| clean.fact_job_day | 180,741 | 54 MB |
 | clean.dim_skill | 21,618 | 10 MB |
 | reference, log, dq, rejected | 4,000 odd | under 2 MB |
-| **clean layer total** | | **370 MB** |
+| **clean layer total** | | **353 MB** |
 
-Projection for three weeks (21 days): fact grows 36 MB a day, dim_job about 2 MB a day (1,000 new versions),
-bridge about 1.3 MB a day, so about **1.1 GB clean** next to about 10 GB raw. The raw JSON is the cost. The
+Projection for three weeks (21 days): fact grows 27 MB a day, dim_job about 2 MB a day (1,000 new versions),
+bridge about 1.3 MB a day, so about **0.9 GB clean** next to about 10 GB raw. The raw JSON is the cost. The
 clean layer is a tenth of it, which is the point of keeping full JSON only in raw. (Reruns leave dead tuples that
 autovacuum reuses. After four reruns and a VACUUM the clean total showed 503 MB, which a VACUUM FULL or a
 partition truncate would give back.)
