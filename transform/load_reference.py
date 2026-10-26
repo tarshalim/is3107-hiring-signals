@@ -18,13 +18,26 @@ import re
 import warnings
 from pathlib import Path
 
-import openpyxl
 from psycopg2.extras import execute_values
 
 from transform.skill_mapping import normalise, read_alias_csv
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DIR = REPO_ROOT / "data" / "reference"
+
+
+def _load_workbook(path: Path):
+    """openpyxl is imported here, not at module level, so that dags/daily_transform_dag.py (which imports
+    this module) still parses on an Airflow image without openpyxl. The official apache/airflow image does
+    not ship it: docker-compose.yml installs it through _PIP_ADDITIONAL_REQUIREMENTS. If it is still
+    missing, only the load_reference task fails, with this message, instead of the whole DAG vanishing
+    from the UI with an import error."""
+    try:
+        import openpyxl
+    except ImportError as exc:  # pragma: no cover - depends on the environment
+        raise ImportError("openpyxl is needed to read the reference xlsx files: pip install openpyxl "
+                          "(in Docker: _PIP_ADDITIONAL_REQUIREMENTS in docker-compose.yml)") from exc
+    return openpyxl.load_workbook(path, read_only=True)
 
 MOM_GROUP = {1: "PMET", 2: "PMET", 3: "PMET", 4: "clerical_sales_services", 5: "clerical_sales_services",
              6: "production_transport", 7: "production_transport", 8: "production_transport", 9: "production_transport"}
@@ -38,7 +51,7 @@ def read_usl(path: Path) -> list[tuple]:
     """(skill_id, skill_title, norm_title, skill_type, is_emerging, is_casl)"""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        wb = openpyxl.load_workbook(path, read_only=True)
+        wb = _load_workbook(path)
     rows = list(wb["Unique Skills List"].iter_rows(values_only=True))
     header = [str(h).strip() if h is not None else "" for h in rows[0]]
     out = {}
@@ -58,7 +71,7 @@ def read_tsc_aliases(path: Path, usl_by_norm: dict) -> dict:
     the unique skill title. Ambiguous aliases (point at two skills) are dropped."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        wb = openpyxl.load_workbook(path, read_only=True)
+        wb = _load_workbook(path)
     rows = list(wb["data"].iter_rows(values_only=True))
     header = [str(h).strip() if h is not None else "" for h in rows[0]]
     aliases, conflicts = {}, set()
@@ -106,7 +119,7 @@ def read_ssoc(path: Path) -> list[tuple]:
     """(ssoc_code, ssoc_title, major_group, major_group_title, mom_group) for 5-digit codes."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        wb = openpyxl.load_workbook(path, read_only=True)
+        wb = _load_workbook(path)
     ws = wb.worksheets[0]
     majors, codes = {}, []
     for r in ws.iter_rows(values_only=True):

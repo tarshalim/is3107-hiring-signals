@@ -53,3 +53,26 @@ def test_sensor_has_a_timeout_so_a_missing_day_fails_clearly():
     src = DAG_FILE.read_text(encoding="utf-8")
     assert "timeout=SENSOR_TIMEOUT" in src and "mode=\"reschedule\"" in src
     assert "AirflowFailException" in src
+
+
+def _module_level_imports(path):
+    """Names imported at the top level of a module (not inside a function)."""
+    names = set()
+    for node in ast.parse(path.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Import):
+            names.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names.add(node.module.split(".")[0])
+    return names
+
+
+def test_dag_import_chain_needs_no_packages_missing_from_the_airflow_image():
+    """The official apache/airflow image has no openpyxl or rapidfuzz. The DAG file imports transform.* and
+    quality.* at module level, so a top-level `import openpyxl` anywhere in that chain makes the whole DAG
+    fail to import in the container (found on 26 Oct 2026 with Airflow 2.11 and 3.0.1 images). openpyxl must
+    stay a function-level import; rapidfuzz is already guarded by try/except."""
+    repo = DAG_FILE.parent.parent
+    for rel in ("transform/load_reference.py", "transform/transform_snapshot.py", "transform/skill_mapping.py",
+                "transform/parse.py", "transform/scd.py", "transform/deltas.py", "quality/clean_checks.py"):
+        imports = _module_level_imports(repo / rel)
+        assert "openpyxl" not in imports, f"{rel} imports openpyxl at module level"
