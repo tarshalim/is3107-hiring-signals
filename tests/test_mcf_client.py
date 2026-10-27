@@ -54,3 +54,30 @@ def test_max_pages_stops_early(tmp_path, monkeypatch):
     stats = mcf_client.snapshot_to_file(tmp_path / "s.jsonl.gz", max_pages=3, session=session)
     assert stats["pages_fetched"] == 3
     assert session.calls == 3
+
+
+def test_session_retries_400_and_429():
+    retry = mcf_client.make_session().get_adapter(mcf_client.BASE_URL).max_retries
+    assert isinstance(retry, mcf_client.LoggedRetry)
+    assert {400, 429} <= set(retry.status_forcelist)
+
+
+class FakeUrllib3Resp:
+    """Just enough of a urllib3 response for Retry.increment."""
+    status = 400
+
+    def get_redirect_location(self):
+        return False
+
+    def get_retry_after(self):
+        return None
+
+
+def test_retry_logs_reason(caplog):
+    retry = mcf_client.make_session().get_adapter(mcf_client.BASE_URL).max_retries
+    with caplog.at_level("WARNING", logger="ingestion.mcf_client"):
+        next_retry = retry.increment("GET", "/v2/jobs?page=364", response=FakeUrllib3Resp())
+    assert "page=364" in caplog.text and "reason: 400" in caplog.text
+    # The next retry must still be a LoggedRetry, or only the first retry would be logged.
+    assert isinstance(next_retry, mcf_client.LoggedRetry)
+    assert next_retry.total == retry.total - 1
