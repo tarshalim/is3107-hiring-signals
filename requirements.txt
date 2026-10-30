@@ -5,3 +5,7 @@ pytest>=8
 # transform layer (role 2)
 openpyxl>=3.1        # read the SkillsFuture and SSOC reference xlsx files
 rapidfuzz>=3.0       # fuzzy skill matching (falls back to difflib if missing)
+# dashboard (same pins as dashboard/requirements.txt)
+streamlit>=1.50
+plotly>=5.20
+pandas>=2.0

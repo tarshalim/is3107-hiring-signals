@@ -14,7 +14,7 @@ unrealistic requirements.
 | `transform/` | Cleaning, deduplication, skill standardisation |
 | `quality/` | Data-quality checks |
 | `sql/init/` | Warehouse schema, applied when the database is first created |
-| `dashboard/` | Dashboard app |
+| `dashboard/` | Streamlit dashboard (`app.py`, one module per tab in `tabs/`) |
 | `data/reference/` | Small static files (e.g. SkillsFuture framework). Everything else in `data/` is git-ignored |
 | `tests/` | `pytest` tests |
 
@@ -55,7 +55,7 @@ docker compose exec warehouse psql -U jobs -d jobs -c \
 
 ## Daily cleaning and warehouse load (role 2)
 
-`wait_for_raw` + `load_reference_tables` → `transform_snapshot` → `run_quality_checks` → `log_run_stats`
+`wait_for_raw` + `load_reference_tables` → `transform_snapshot` → `run_quality_checks` → `refresh_dashboard_marts` + `log_run_stats`
 (`dags/daily_transform_dag.py`, 10:30 Singapore time, after the ingest DAG).
 
 - **transform_snapshot** reads one day from `raw.mcf_job_snapshots`, cleans every posting
@@ -65,6 +65,8 @@ docker compose exec warehouse psql -U jobs -d jobs -c \
   increase since the previous snapshot). Rerunning a day gives the same tables.
 - **run_quality_checks** runs 30 schema, range and business-rule checks and stores the verdicts in
   `clean.dq_results`. A `fail` severity check fails the run.
+- **refresh_dashboard_marts** rebuilds the `mart` schema (`sql/init/03_dashboard_marts.sql`) that the
+  dashboard reads. It runs only after the quality checks pass.
 - **log_run_stats** writes step timings and the skill match rate to `clean.load_log`.
 
 Without Airflow (for teammates and verification):
@@ -72,10 +74,35 @@ Without Airflow (for teammates and verification):
 ```bash
 python -m ingestion.load_snapshot_file data/raw/mcf/2026-10-25.jsonl.gz --ingest-runs ingest_runs.csv  # replay a saved day
 python -m transform.run --date 2026-10-25                                                           # transform + checks
+python -m transform.refresh_marts                                                                   # rebuild the dashboard marts
 ```
 
 Design notes and measured numbers: `docs/role2-cleaning-and-warehouse.md`, ER diagram: `docs/er-diagram.md`,
 step-by-step reproduction: `docs/VERIFY-ME.md`.
+
+## Dashboard
+
+```bash
+docker compose up -d dashboard        # http://localhost:8501
+# or, against the warehouse on port 5433:
+pip install -r dashboard/requirements.txt
+streamlit run dashboard/app.py
+```
+
+Five tabs, all filterable by window (7/14/30 days), occupation group, SSOC major group, job category, skill
+type and emerging skills:
+
+- **Trending skills**: top 20 skills by share of postings, last-7-days vs previous-7-days change in share, daily trend.
+- **Salary**: P25 to P75 monthly salary bands for skills, skill pairs and occupations (disclosed salaries only).
+- **Hiring difficulty**: applications per posting, repost rate and days open, combined into a relative index.
+- **Career moves**: occupations with similar skill demand, the skill gap between two occupations, and the
+  occupations your own skills cover best.
+- **Pipeline health**: ingestion coverage, transform timings, data-quality verdicts and skill-match quality.
+
+The tabs read pre-aggregated materialised views in schema `mart`, so a click is a lookup, not a scan of the
+fact table. The marts are rebuilt by the DAG's `refresh_dashboard_marts` task. On a database created before
+`03_dashboard_marts.sql` existed, build them once with `python -m transform.refresh_marts`.
+Week-over-week change needs 14 days of data; until then the dashboard says so instead of showing a number.
 
 ## Tests
 
