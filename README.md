@@ -53,11 +53,35 @@ docker compose exec warehouse psql -U jobs -d jobs -c \
 
 `catchup=False`: view and application counts can't be fetched for past days, so the DAG never backfills.
 
+## Daily cleaning and warehouse load (role 2)
+
+`wait_for_raw` + `load_reference_tables` → `transform_snapshot` → `run_quality_checks` → `log_run_stats`
+(`dags/daily_transform_dag.py`, 10:30 Singapore time, after the ingest DAG).
+
+- **transform_snapshot** reads one day from `raw.mcf_job_snapshots`, cleans every posting
+  (`transform/parse.py`), maps new skill tags to the SkillsFuture Unique Skills List
+  (`transform/skill_mapping.py`) and loads the star schema in `clean`: `dim_job` (SCD Type 2),
+  `dim_skill`, `bridge_job_skill`, `dim_date`, `fact_job_day` (one row per posting per day with the
+  increase since the previous snapshot). Rerunning a day gives the same tables.
+- **run_quality_checks** runs 30 schema, range and business-rule checks and stores the verdicts in
+  `clean.dq_results`. A `fail` severity check fails the run.
+- **log_run_stats** writes step timings and the skill match rate to `clean.load_log`.
+
+Without Airflow (for teammates and verification):
+
+```bash
+python -m ingestion.load_snapshot_file data/raw/mcf/2026-10-25.jsonl.gz --ingest-runs ingest_runs.csv  # replay a saved day
+python -m transform.run --date 2026-10-25                                                           # transform + checks
+```
+
+Design notes and measured numbers: `docs/role2-cleaning-and-warehouse.md`, ER diagram: `docs/er-diagram.md`,
+step-by-step reproduction: `docs/VERIFY-ME.md`.
+
 ## Tests
 
 ```bash
 pip install -r requirements.txt
-pytest
+pytest            # offline; the Postgres end-to-end test runs only when WAREHOUSE_TEST_DSN is set
 ```
 
 ## Team
