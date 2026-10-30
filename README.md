@@ -104,6 +104,14 @@ fact table. The marts are rebuilt by the DAG's `refresh_dashboard_marts` task. O
 `03_dashboard_marts.sql` existed, build them once with `python -m transform.refresh_marts`.
 Week-over-week change needs 14 days of data; until then the dashboard says so instead of showing a number.
 
+To try the dashboard without crawl data, fill an **empty** warehouse with synthetic postings
+(refuses to run if `clean.fact_job_day` has rows), then build the marts:
+
+```bash
+python -m dashboard.demo_data --days 21 --postings 250000   # ~1.6M fact rows, about a minute
+python -m transform.refresh_marts
+```
+
 ## Tests
 
 ```bash

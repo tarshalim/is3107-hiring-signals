@@ -22,6 +22,8 @@ def render(f: Filters, days_of_history: int):
                    labels={"share_pct": "% of postings", "skill_label": "", "type_label": "Skill type"},
                    hover_data={"mentions": True, "share_pct": ":.1f"})
     chart.update_layout(height=max(420, 28 * len(top)), legend_orientation="h", legend_y=-0.15)
+    # colouring by type makes one trace per type, which would group the bars by type instead of by rank
+    chart.update_yaxes(categoryorder="array", categoryarray=top["skill_label"].tolist()[::-1])
     left, right = st.columns([3, 2])
     left.plotly_chart(chart, width="stretch")
 
