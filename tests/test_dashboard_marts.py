@@ -47,19 +47,24 @@ def _seed(cur):
           (4, 'u-excel','Excel',  'excel',  NULL,         NULL,                 NULL,  NULL,  NULL,  'unmatched', NULL, %(f)s, %(l)s)
     """, {"f": FIRST, "l": LAST})
 
-    jobs = [  # job_key, uuid, ssoc, major, mom, category, salary_min, salary_max, hidden, first day index
-        (1, "j1", "25122", 2, "PMET", "Information Technology", 4000, 6000, False, 0),
-        (2, "j2", "41101", 4, "clerical_sales_services", "Admin", 2000, 2400, False, 0),
-        (3, "j3", "25122", 2, "PMET", "Information Technology", 0, 0, True, 7),
+    jobs = [  # job_key, uuid, ssoc, major, mom, category, salary_min, salary_max, hidden, first day index,
+              # employer, industry, position level, years of experience asked
+        (1, "j1", "25122", 2, "PMET", "Information Technology", 4000, 6000, False, 0,
+         "Acme", "Software", "Executive", 3),
+        (2, "j2", "41101", 4, "clerical_sales_services", "Admin", 2000, 2400, False, 0,
+         "Bolt", "Retail", "Non-executive", 0),
+        (3, "j3", "25122", 2, "PMET", "Information Technology", 0, 0, True, 7,
+         "Acme", "Software", "Executive", 5),
     ]
-    for key, uuid, ssoc, major, mom, cat, smin, smax, hidden, start in jobs:
+    for key, uuid, ssoc, major, mom, cat, smin, smax, hidden, start, company, industry, level, years in jobs:
         cur.execute("""
             INSERT INTO clean.dim_job (job_key, job_uuid, title, ssoc_code, ssoc_title, ssoc_major_group, mom_group,
                                        category, salary_min, salary_max, salary_is_hidden, vacancies, attr_hash,
-                                       valid_from, last_seen_date)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s, %s)
+                                       valid_from, last_seen_date, company_name, company_ssic_desc, position_level,
+                                       min_years_exp)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s, %s, %s, %s, %s, %s)
         """, (key, uuid, f"title {uuid}", ssoc, f"occupation {ssoc}", major, mom, cat, smin, smax, hidden,
-              f"hash{key}", FIRST + timedelta(days=start), LAST))
+              f"hash{key}", FIRST + timedelta(days=start), LAST, company, industry, level, years))
     cur.execute("""
         INSERT INTO clean.bridge_job_skill (job_key, skill_key) VALUES (1, 1), (1, 2), (1, 3), (2, 4), (3, 1)
     """)
@@ -73,7 +78,8 @@ def _seed(cur):
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (int(day.strftime("%Y%m%d")), day, day.year, day.month, day.day, day.isoweekday(),
               day.strftime("%A"), day.isoweekday() >= 6, day - timedelta(days=day.weekday()), day.isocalendar()[1]))
-        for key, uuid, *_rest, start in jobs:
+        for key, uuid, *_rest in jobs:
+            start = _rest[-5]
             if i < start:
                 continue
             first = i == start
@@ -98,7 +104,7 @@ def conn():
     admin.close()
     c = psycopg2.connect(_test_dsn())
     with c, c.cursor() as cur:
-        for f in ("01_raw_schema.sql", "02_clean_schema.sql"):
+        for f in ("01_raw_schema.sql", "02_clean_schema.sql", "04_salary_model.sql"):
             cur.execute((REPO / "sql" / "init" / f).read_text(encoding="utf-8"))
         _seed(cur)
     yield c
@@ -143,7 +149,7 @@ def test_the_sql_file_applies_to_empty_tables_as_on_first_container_start():
     c = psycopg2.connect(f"{base}/is3107_marts_empty")
     try:
         with c, c.cursor() as cur:
-            for f in ("01_raw_schema.sql", "02_clean_schema.sql", "03_dashboard_marts.sql"):
+            for f in ("01_raw_schema.sql", "02_clean_schema.sql", "03_dashboard_marts.sql", "04_salary_model.sql"):
                 cur.execute((REPO / "sql" / "init" / f).read_text(encoding="utf-8"))
     finally:
         c.close()
@@ -184,6 +190,37 @@ def test_skill_pairs_are_ordered_and_unique(conn, marts):
     with conn.cursor() as cur:
         cur.execute("SELECT skill_a, skill_b, postings, salary_p50 FROM mart.skill_pair_latest")
         assert cur.fetchall() == [("ssg-python", "ssg-sql", 1, 5000)]
+
+
+def test_employer_and_industry_marts(conn, marts):
+    with conn.cursor() as cur:
+        cur.execute("SELECT employer, mom_group, postings, industry FROM mart.company_latest ORDER BY employer")
+        assert cur.fetchall() == [("Acme", "PMET", 2, "Software"), ("Bolt", "clerical_sales_services", 1, "Retail")]
+        cur.execute("SELECT employer, skill_id, postings FROM mart.company_skill_latest")
+        assert cur.fetchall() == [("Acme", "ssg-python", 2)]          # skills held by a single posting are dropped
+        cur.execute("SELECT industry, postings, salary_postings, salary_p50 FROM mart.industry_latest ORDER BY 1")
+        assert cur.fetchall() == [("Retail", 1, 1, 2200), ("Software", 2, 1, 5000)]
+
+
+def test_salary_drivers_bucket_experience_level_and_skill_count(conn, marts):
+    with conn.cursor() as cur:
+        cur.execute("SELECT driver, bucket, salary_postings, salary_p50 FROM mart.salary_driver_latest ORDER BY 1, 2")
+        rows = {(d, b): (n, p) for d, b, n, p in cur.fetchall()}
+    assert rows[("experience", "3-5 years")] == (1, 5000)
+    assert rows[("experience", "None")] == (1, 2200)
+    assert rows[("position_level", "Executive")] == (1, 5000)
+    assert rows[("skill_count", "1-2 skills")] == (2, 3600)             # j1 has 2 distinct skills, j2 has 1
+
+
+def test_postings_without_an_employer_are_not_ranked(conn, marts):
+    assert _scalar(conn, "SELECT count(*) FROM mart.company_latest WHERE employer = 'Unknown employer'") == 0
+
+
+def test_training_is_skipped_when_there_is_too_little_data(conn, marts):
+    from transform.salary_model import load_model, train
+    assert "skipped" in train(conn)
+    assert load_model(conn) is None
+    conn.rollback()
 
 
 def test_trending_share_and_week_over_week_change(queries):
@@ -238,6 +275,22 @@ def test_every_dashboard_query_runs(queries):
     occupations, skills = queries.occupation_skill_profiles()
     assert list(occupations.columns) == ["ssoc_code", "ssoc_title", "mom_group", "postings"]
     assert "skill_postings" in skills.columns
+    industries = queries.industry_overview(f)
+    assert industries["industry"].tolist() == ["Software", "Retail"]
+    assert industries.iloc[0]["posting_days"] == 21
+    assert industries.iloc[0]["share"] == pytest.approx(21 / 35)
+    heat = queries.industry_skill_heatmap(f)
+    assert heat.to_dict("records") == [{"industry": "Software", "skill_label": "Python Programming", "share": 1.0}]
+    assert queries.industry_top_skills(f, "Software")["skill_label"].tolist() == ["Python Programming"]
+    employers = queries.top_employers(f)
+    assert employers["employer"].tolist() == ["Acme", "Bolt"]
+    assert employers.iloc[0]["total_postings"] == 3
+    assert queries.top_employers(Filters(mom_groups=("PMET",)))["employer"].tolist() == ["Acme"]
+    assert queries.employer_top_skills(f, "Acme").iloc[0]["share"] == 1.0
+    assert len(queries.salary_drivers(1)) == 5
+    assert queries.industry_salaries(1)["industry"].tolist() == ["Software", "Retail"]
+    assert len(queries.estimator_occupations()) == 2
+    assert queries.salary_model() is None
     assert queries.freshness().iloc[0]["mart_latest"] == LAST
     queries.skill_match_quality()
     queries.ingest_runs()

@@ -12,7 +12,9 @@ from dashboard import queries  # noqa: E402
 from dashboard.filters import (  # noqa: E402
     MOM_GROUP_LABELS, SKILL_TYPE_LABELS, SKILL_TYPES, WINDOW_OPTIONS, Filters,
 )
-from dashboard.tabs import difficulty, pipeline, salary, transitions, trending  # noqa: E402
+from dashboard.tabs import (  # noqa: E402
+    difficulty, estimator, industries, pipeline, salary, transitions, trending,
+)
 
 st.set_page_config(page_title="SG hiring signals", page_icon=":bar_chart:", layout="wide")
 
@@ -29,7 +31,7 @@ def sidebar_filters(options: dict) -> Filters:
     major = st.sidebar.multiselect("Occupation (SSOC major group)", list(major_labels),
                                    format_func=lambda m: f"{m}: {major_labels[m]}")
 
-    industry = st.sidebar.multiselect("Job category (industry)", options["categories"]["category"].tolist())
+    industry = st.sidebar.multiselect("Job category (MyCareersFuture)", options["categories"]["category"].tolist())
 
     stype = st.sidebar.multiselect("Skill type", SKILL_TYPES, format_func=SKILL_TYPE_LABELS.get)
     emerging = st.sidebar.checkbox("Emerging skills only")
@@ -60,12 +62,17 @@ def main():
         st.info(f"Only {int(cov['days'])} days of history: week-over-week changes need 14 days and "
                 "are hidden until then.")
 
-    tab_trend, tab_salary, tab_diff, tab_move, tab_pipe = st.tabs(
-        ["Trending skills", "Salary", "Hiring difficulty", "Career moves", "Pipeline health"])
+    tab_trend, tab_salary, tab_ind, tab_est, tab_diff, tab_move, tab_pipe = st.tabs(
+        ["Trending skills", "Salary", "Industries & employers", "Salary estimator", "Hiring difficulty",
+         "Career moves", "Pipeline health"])
     with tab_trend:
         trending.render(f, int(cov["days"]))
     with tab_salary:
         salary.render(f)
+    with tab_ind:
+        industries.render(f, int(cov["days"]))
+    with tab_est:
+        estimator.render()
     with tab_diff:
         difficulty.render(f)
     with tab_move:

@@ -12,7 +12,9 @@ from pathlib import Path
 MARTS_SQL = Path(__file__).resolve().parent.parent / "sql" / "init" / "03_dashboard_marts.sql"
 MARTS = (
     "slice_day", "skill_slice_day", "occupation_day",
+    "industry_slice_day",
     "occupation_latest", "occupation_skill_latest", "skill_salary_latest", "skill_pair_latest",
+    "industry_latest", "industry_skill_latest", "company_latest", "company_skill_latest", "salary_driver_latest",
 )
 
 

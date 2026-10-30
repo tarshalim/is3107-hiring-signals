@@ -17,6 +17,8 @@ SKILLS, TAGS, OCCUPATIONS = 300, 400, 90
 CATEGORIES = ("Information Technology", "Engineering", "Banking and Finance", "Sales / Retail", "Admin / Secretarial",
               "Healthcare / Pharmaceutical", "Education and Training", "Logistics / Supply Chain", "F&B",
               "Manufacturing", "Marketing / Public Relations", "Others")
+LEVELS = ("Fresh/entry level", "Non-executive", "Junior Executive", "Executive", "Senior Executive", "Manager",
+          "Senior Management")
 
 REFERENCE_SQL = """
 INSERT INTO clean.ref_ssoc (ssoc_code, ssoc_title, major_group, major_group_title, mom_group)
@@ -56,21 +58,26 @@ SELECT g AS job_key, 'job-' || g AS uuid, floor(random() * %(days)s)::int AS fir
        1 + floor(-ln(1 - random()) * 10)::int AS life,
        1 + floor(%(occ)s * power(random(), 1.5))::int AS occ,
        1 + floor(%(cats)s * random() * random())::int AS cat,
-       random() AS r_sal, random() AS r_hide
+       1 + floor(600 * power(random(), 2))::int AS comp,
+       floor(7 * power(random(), 1.3))::int AS lvl,
+       random() AS r_sal, random() AS r_hide, random() AS r_exp
 FROM generate_series(1, %(postings)s) g;
 
 INSERT INTO clean.dim_job (job_key, job_uuid, title, ssoc_code, ssoc_title, ssoc_major_group, mom_group, category,
+                           company_name, company_ssic_desc, position_level, min_years_exp,
                            salary_min, salary_max, salary_is_hidden, vacancies, attr_hash, valid_from, last_seen_date)
 SELECT j.job_key, j.uuid, 'Posting ' || j.job_key, o.ssoc_code, o.ssoc_title, o.major_group, o.mom_group,
        (%(categories)s::text[])[j.cat],
+       'Company ' || j.comp, 'Industry ' || (1 + j.comp %% 25),
+       (%(levels)s::text[])[1 + j.lvl], j.lvl * 2 + floor(j.r_exp * 3)::int,
        CASE WHEN j.r_sal < 0.02 THEN 0
-            WHEN o.major_group <= 3 THEN round((4000 + 5000 * j.r_sal)::numeric, -2)
-            WHEN o.major_group <= 5 THEN round((2000 + 1500 * j.r_sal)::numeric, -2)
-            ELSE round((1800 + 1200 * j.r_sal)::numeric, -2) END,
+            WHEN o.major_group <= 3 THEN round(((4000 + 5000 * j.r_sal) * (1 + 0.10 * j.lvl))::numeric, -2)
+            WHEN o.major_group <= 5 THEN round(((2000 + 1500 * j.r_sal) * (1 + 0.10 * j.lvl))::numeric, -2)
+            ELSE round(((1800 + 1200 * j.r_sal) * (1 + 0.10 * j.lvl))::numeric, -2) END,
        CASE WHEN j.r_sal < 0.02 THEN 0
-            WHEN o.major_group <= 3 THEN round((4000 + 5000 * j.r_sal)::numeric * 1.3, -2)
-            WHEN o.major_group <= 5 THEN round((2000 + 1500 * j.r_sal)::numeric * 1.3, -2)
-            ELSE round((1800 + 1200 * j.r_sal)::numeric * 1.3, -2) END,
+            WHEN o.major_group <= 3 THEN round(((4000 + 5000 * j.r_sal) * (1 + 0.10 * j.lvl))::numeric * 1.3, -2)
+            WHEN o.major_group <= 5 THEN round(((2000 + 1500 * j.r_sal) * (1 + 0.10 * j.lvl))::numeric * 1.3, -2)
+            ELSE round(((1800 + 1200 * j.r_sal) * (1 + 0.10 * j.lvl))::numeric * 1.3, -2) END,
        j.r_hide < 0.25, 1 + (j.job_key %% 3), 'h' || j.job_key,
        %(first)s::date + j.first_day, %(first)s::date + least(j.first_day + j.life - 1, %(days)s - 1)
 FROM demo_job j
@@ -86,6 +93,14 @@ SELECT job_key, skill_key FROM (
     SELECT job_key, 7 FROM demo_job WHERE random() < 0.02 + 0.10 * first_day / GREATEST(%(days)s - 1, 1)
 ) x
 GROUP BY job_key, skill_key;
+
+-- skills whose number is a multiple of 13 pay 12 percent more each, so the salary tabs and the estimator have a signal
+UPDATE clean.dim_job d
+SET salary_min = round(d.salary_min * p.mult, -1), salary_max = round(d.salary_max * p.mult, -1)
+FROM (SELECT b.job_key, power(1.12, count(*)) AS mult
+      FROM clean.bridge_job_skill b JOIN clean.dim_skill s USING (skill_key)
+      WHERE s.skill_key <= %(skills)s AND s.skill_key %% 13 = 0 GROUP BY b.job_key) p
+WHERE p.job_key = d.job_key AND d.salary_min > 0;
 
 INSERT INTO clean.fact_job_day (snapshot_date, job_uuid, job_key, date_key, views_total, applications_total, repost_count,
         edit_count, status, days_since_original_posting, prev_snapshot_date, hours_since_prev, is_first_snapshot,
@@ -125,7 +140,7 @@ def seed(conn, days: int = 21, postings: int = 250_000, first: date | None = Non
     first = first or date.today() - timedelta(days=days - 1)
     params = {"days": days, "postings": postings, "first": first, "last": first + timedelta(days=days - 1),
               "occ": OCCUPATIONS, "skills": SKILLS, "tags": TAGS, "cats": len(CATEGORIES),
-              "categories": list(CATEGORIES)}
+              "categories": list(CATEGORIES), "levels": list(LEVELS)}
     started = time.perf_counter()
     with conn:
         with conn.cursor() as cur:

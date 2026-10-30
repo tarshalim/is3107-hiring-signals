@@ -31,6 +31,15 @@ def _occupation_slice(alias: str = "") -> str:
     )
 
 
+def _group_slice(alias: str = "") -> str:
+    """Industry and employer marts carry the occupation-group columns but no job category."""
+    a = f"{alias}." if alias else ""
+    return (
+        f"(cardinality(%(mom)s::text[]) = 0 OR {a}mom_group = ANY(%(mom)s::text[])) "
+        f"AND (cardinality(%(major)s::int[]) = 0 OR {a}ssoc_major_group = ANY(%(major)s::int[]))"
+    )
+
+
 def _skill_filter(alias: str = "k") -> str:
     return (
         f"(cardinality(%(stype)s::text[]) = 0 OR {alias}.skill_type = ANY(%(stype)s::text[])) "
@@ -185,6 +194,155 @@ def occupation_salaries(f: Filters, min_salary_postings: int = 20, limit: int = 
     LIMIT %(limit)s
     """
     return run_query(sql, {**f.params(), "min_n": min_salary_postings, "limit": limit})
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def salary_drivers(min_salary_postings: int = 30):
+    """Salary percentiles by years of experience asked, position level and number of skills listed."""
+    return run_query("""
+        SELECT driver, bucket, sort, salary_postings, salary_p25, salary_p50, salary_p75
+        FROM mart.salary_driver_latest
+        WHERE salary_postings >= %(min_n)s
+        ORDER BY driver, sort, salary_p50
+    """, {"min_n": min_salary_postings})
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def industry_salaries(min_salary_postings: int = 30):
+    return run_query("""
+        SELECT industry, postings, salary_postings, salary_p25, salary_p50, salary_p75
+        FROM mart.industry_latest
+        WHERE salary_postings >= %(min_n)s AND industry <> 'Unknown industry'
+        ORDER BY salary_p50 DESC
+        LIMIT 30
+    """, {"min_n": min_salary_postings})
+
+
+# --- industries and employers -------------------------------------------------------------------
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def industry_overview(f: Filters, limit: int = 25):
+    """Open postings per industry over the window, share of all postings, and the share change week over week."""
+    sql = f"""
+    WITH d AS (
+        SELECT industry,
+               sum(postings) AS posting_days,
+               sum(postings) FILTER (WHERE snapshot_date > {AS_OF} - 7)                                   AS recent,
+               sum(postings) FILTER (WHERE snapshot_date <= {AS_OF} - 7 AND snapshot_date > {AS_OF} - 14) AS prev,
+               sum(applications_per_day) / NULLIF(sum(rated_postings), 0) AS applications_per_posting
+        FROM mart.industry_slice_day
+        WHERE snapshot_date > {AS_OF} - %(window)s AND {_group_slice()}
+        GROUP BY industry
+    ),
+    days AS (
+        SELECT count(DISTINCT snapshot_date) AS n FROM mart.industry_slice_day
+        WHERE snapshot_date > {AS_OF} - %(window)s
+    )
+    SELECT industry, posting_days, posting_days::float8 / NULLIF(days.n, 0) AS avg_open_postings,
+           posting_days::float8 / NULLIF(sum(posting_days) OVER (), 0) AS share,
+           recent::float8 / NULLIF(sum(recent) OVER (), 0) AS recent_share,
+           prev::float8 / NULLIF(sum(prev) OVER (), 0) AS prev_share,
+           applications_per_posting
+    FROM d CROSS JOIN days
+    ORDER BY posting_days DESC
+    LIMIT %(limit)s
+    """
+    return run_query(sql, {**f.params(), "limit": limit})
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def industry_skill_heatmap(f: Filters, n_industries: int = 12, n_skills: int = 15):
+    """Share of each large industry's postings that ask for each of the most-requested skills (latest day)."""
+    sql = f"""
+    WITH ind AS (
+        SELECT industry, postings FROM mart.industry_latest
+        WHERE industry <> 'Unknown industry' ORDER BY postings DESC LIMIT %(n_ind)s
+    ),
+    top_skill AS (
+        SELECT s.skill_id FROM mart.industry_skill_latest s
+        JOIN ind USING (industry) JOIN mart.skill k USING (skill_id)
+        WHERE {_skill_filter('k')}
+        GROUP BY s.skill_id ORDER BY sum(s.postings) DESC LIMIT %(n_skills)s
+    )
+    SELECT i.industry, k.skill_label, s.postings::float8 / i.postings AS share
+    FROM ind i
+    JOIN mart.industry_skill_latest s ON s.industry = i.industry
+    JOIN top_skill t ON t.skill_id = s.skill_id
+    JOIN mart.skill k ON k.skill_id = s.skill_id
+    """
+    return run_query(sql, {**f.params(), "n_ind": n_industries, "n_skills": n_skills})
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def industry_top_skills(f: Filters, industry: str, limit: int = 15):
+    sql = f"""
+    SELECT k.skill_label, k.skill_type, s.postings,
+           s.postings::float8 / NULLIF(i.postings, 0) AS share
+    FROM mart.industry_skill_latest s
+    JOIN mart.industry_latest i USING (industry)
+    JOIN mart.skill k USING (skill_id)
+    WHERE s.industry = %(industry)s AND {_skill_filter('k')}
+    ORDER BY s.postings DESC
+    LIMIT %(limit)s
+    """
+    return run_query(sql, {**f.params(), "industry": industry, "limit": limit})
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def top_employers(f: Filters, limit: int = 20):
+    """Employers with the most postings open on the latest day. `total_postings` is the whole slice."""
+    sql = f"""
+    SELECT employer, min(industry) AS industry, sum(postings) AS postings, sum(vacancies) AS vacancies,
+           sum(applications_per_day) / NULLIF(sum(rated_postings), 0) AS applications_per_posting,
+           sum(sum(postings)) OVER () AS total_postings,
+           count(*) OVER () AS employers
+    FROM mart.company_latest
+    WHERE {_group_slice()}
+    GROUP BY employer
+    ORDER BY postings DESC, employer
+    LIMIT %(limit)s
+    """
+    return run_query(sql, {**f.params(), "limit": limit})
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def employer_top_skills(f: Filters, employer: str, limit: int = 15):
+    sql = f"""
+    SELECT k.skill_label, k.skill_type, s.postings,
+           s.postings::float8 / NULLIF((SELECT sum(postings) FROM mart.company_latest WHERE employer = %(employer)s), 0)
+               AS share
+    FROM mart.company_skill_latest s
+    JOIN mart.skill k USING (skill_id)
+    WHERE s.employer = %(employer)s AND {_skill_filter('k')}
+    ORDER BY s.postings DESC
+    LIMIT %(limit)s
+    """
+    return run_query(sql, {**f.params(), "employer": employer, "limit": limit})
+
+
+# --- salary estimator ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def estimator_occupations():
+    return run_query("""
+        SELECT ssoc_code, ssoc_title, postings
+        FROM mart.occupation_latest
+        WHERE ssoc_code ~ '^[0-9]{3}'
+        ORDER BY ssoc_title
+    """)
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def salary_model():
+    """The most recently trained salary model (transform.salary_model), or None if there is not one yet."""
+    from transform.db import connect
+    from transform.salary_model import load_model
+    conn = connect()
+    try:
+        conn.set_session(readonly=True, autocommit=True)
+        return load_model(conn)
+    finally:
+        conn.close()
 
 
 # --- hiring difficulty --------------------------------------------------------------------------

@@ -13,7 +13,7 @@ x-airflow-env: &airflow-env
   # The official image has no openpyxl (reference xlsx files) or rapidfuzz (skill matching). The image's
   # entrypoint pip-installs this list at container start. Without it the transform DAG's load_reference
   # task cannot read data/reference/*.xlsx and fuzzy matching falls back to difflib (different results).
-  _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-openpyxl>=3.1 rapidfuzz>=3.0}
+  _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-openpyxl>=3.1 rapidfuzz>=3.0 numpy>=1.26}
 
 x-airflow-volumes: &airflow-volumes
   - ./dags:/opt/airflow/dags

@@ -4,7 +4,11 @@ import streamlit as st
 
 from dashboard import queries
 
-STATUS_ICON = {"pass": "âœ…", "warn": "âš ï¸", "fail": "âŒ"}
+STATUS_ICON = {"pass": "\u2705", "warn": "\u26a0\ufe0f", "fail": "\u274c"}
+
+# Proposal targets
+RELIABILITY_TARGET = 0.95
+EXTRACTION_TARGET = 0.85
 
 
 def render():
@@ -26,11 +30,17 @@ def render():
         runs = runs.sort_values("snapshot_date")
         expected_days = (runs["snapshot_date"].max() - runs["snapshot_date"].min()).days + 1
         missing = expected_days - len(runs)
-        a, b = st.columns(2)
-        a.metric("Days with a snapshot", f"{len(runs)} of {expected_days}", delta=f"{-missing} missing" if missing else None,
-                 delta_color="inverse")
+        reliability = len(runs) / expected_days
+        a, b, c = st.columns(3)
+        a.metric("Daily run reliability", f"{reliability:.1%}",
+                 delta=f"target {RELIABILITY_TARGET:.0%}: {'met' if reliability >= RELIABILITY_TARGET else 'missed'}",
+                 delta_color="normal" if reliability >= RELIABILITY_TARGET else "inverse",
+                 help="Days with a successful snapshot divided by calendar days in the last 30 days of history. "
+                      "A failed day leaves no snapshot, so it counts as missing.")
+        b.metric("Days with a snapshot", f"{len(runs)} of {expected_days}",
+                 delta=f"{-missing} missing" if missing else None, delta_color="inverse")
         coverage = runs["jobs_fetched"] / runs["api_total"].where(runs["api_total"] > 0)
-        b.metric("Latest fetch coverage", f"{coverage.iloc[-1]:.1%}" if coverage.notna().iloc[-1] else "n/a")
+        c.metric("Latest fetch coverage", f"{coverage.iloc[-1]:.1%}" if coverage.notna().iloc[-1] else "n/a")
         st.plotly_chart(px.bar(runs, x="snapshot_date", y="jobs_fetched", title="Postings fetched per day",
                                labels={"snapshot_date": "", "jobs_fetched": ""}), width="stretch")
 
@@ -62,7 +72,12 @@ def render():
     if not match.empty:
         total = match["skill_tags"].sum()
         unmatched = match.loc[match["match_method"] == "unmatched", "skill_tags"].sum()
-        st.metric("MCF skill tags mapped to an SSG skill", f"{1 - unmatched / total:.1%}")
+        mapped = 1 - unmatched / total
+        st.metric("MCF skill tags mapped to an SSG skill", f"{mapped:.1%}",
+                  delta=f"proposal target {EXTRACTION_TARGET:.0%}: {'met' if mapped >= EXTRACTION_TARGET else 'missed'}",
+                  delta_color="normal" if mapped >= EXTRACTION_TARGET else "inverse")
+        st.caption("This is a proxy. The proposal's 85% target is accuracy on 200 hand-labelled postings, which "
+                   "needs a labelled sample; the mapping rate only shows how many skill tags found an SSG skill.")
         st.plotly_chart(px.bar(match, x="match_method", y="skill_tags", hover_data={"avg_confidence": ":.2f"},
                                labels={"match_method": "Match method", "skill_tags": "Skill tags"}),
                         width="stretch")

@@ -55,7 +55,7 @@ docker compose exec warehouse psql -U jobs -d jobs -c \
 
 ## Daily cleaning and warehouse load (role 2)
 
-`wait_for_raw` + `load_reference_tables` → `transform_snapshot` → `run_quality_checks` → `refresh_dashboard_marts` + `log_run_stats`
+`wait_for_raw` + `load_reference_tables` → `transform_snapshot` → `run_quality_checks` → `refresh_dashboard_marts` ? `train_salary_model`, plus `log_run_stats`
 (`dags/daily_transform_dag.py`, 10:30 Singapore time, after the ingest DAG).
 
 - **transform_snapshot** reads one day from `raw.mcf_job_snapshots`, cleans every posting
@@ -67,6 +67,9 @@ docker compose exec warehouse psql -U jobs -d jobs -c \
   `clean.dq_results`. A `fail` severity check fails the run.
 - **refresh_dashboard_marts** rebuilds the `mart` schema (`sql/init/03_dashboard_marts.sql`) that the
   dashboard reads. It runs only after the quality checks pass.
+- **train_salary_model** fits the salary estimator on postings that disclose a salary
+  (`transform/salary_model.py`, numpy only) and stores it in schema `ml` (`sql/init/04_salary_model.sql`).
+  The dashboard tab reads the latest stored model. A failure here does not affect the marts.
 - **log_run_stats** writes step timings and the skill match rate to `clean.load_log`.
 
 Without Airflow (for teammates and verification):
@@ -75,6 +78,7 @@ Without Airflow (for teammates and verification):
 python -m ingestion.load_snapshot_file data/raw/mcf/2026-10-25.jsonl.gz --ingest-runs ingest_runs.csv  # replay a saved day
 python -m transform.run --date 2026-10-25                                                           # transform + checks
 python -m transform.refresh_marts                                                                   # rebuild the dashboard marts
+python -m transform.salary_model                                                                    # retrain the salary estimator
 ```
 
 Design notes and measured numbers: `docs/role2-cleaning-and-warehouse.md`, ER diagram: `docs/er-diagram.md`,
@@ -89,19 +93,29 @@ pip install -r dashboard/requirements.txt
 streamlit run dashboard/app.py
 ```
 
-Five tabs, all filterable by window (7/14/30 days), occupation group, SSOC major group, job category, skill
+Seven tabs, all filterable by window (7/14/30 days), occupation group, SSOC major group, job category, skill
 type and emerging skills:
 
 - **Trending skills**: top 20 skills by share of postings, last-7-days vs previous-7-days change in share, daily trend.
-- **Salary**: P25 to P75 monthly salary bands for skills, skill pairs and occupations (disclosed salaries only).
+- **Salary**: P25 to P75 monthly salary bands for skills, skill pairs and occupations (disclosed salaries only),
+  plus how pay moves with years of experience, position level and number of skills listed.
+- **Industries & employers**: postings and week-over-week share change by industry, industry salary bands, a
+  skills-by-industry heatmap, and the top 20 hiring employers with the skills each one asks for. These ignore
+  the job category filter.
+- **Salary estimator**: estimates the monthly salary midpoint for an occupation, position level, category,
+  experience and skill set, with a likely range, what drives the estimate and the model's held-out error
+  against the proposal's 15% target.
 - **Hiring difficulty**: applications per posting, repost rate and days open, combined into a relative index.
 - **Career moves**: occupations with similar skill demand, the skill gap between two occupations, and the
   occupations your own skills cover best.
-- **Pipeline health**: ingestion coverage, transform timings, data-quality verdicts and skill-match quality.
+- **Pipeline health**: daily-run reliability against the 95% target, ingestion coverage, transform timings,
+  data-quality verdicts and skill-match quality (a proxy for the 85% extraction-accuracy target, which needs a
+  hand-labelled sample).
 
 The tabs read pre-aggregated materialised views in schema `mart`, so a click is a lookup, not a scan of the
 fact table. The marts are rebuilt by the DAG's `refresh_dashboard_marts` task. On a database created before
-`03_dashboard_marts.sql` existed, build them once with `python -m transform.refresh_marts`.
+`03_dashboard_marts.sql` existed, build them once with `python -m transform.refresh_marts`, and apply
+`sql/init/04_salary_model.sql` before training the estimator.
 Week-over-week change needs 14 days of data; until then the dashboard says so instead of showing a number.
 
 To try the dashboard without crawl data, fill an **empty** warehouse with synthetic postings
@@ -110,6 +124,7 @@ To try the dashboard without crawl data, fill an **empty** warehouse with synthe
 ```bash
 python -m dashboard.demo_data --days 21 --postings 250000   # ~1.6M fact rows, about a minute
 python -m transform.refresh_marts
+python -m transform.salary_model                            # synthetic salaries follow level, experience and skills
 ```
 
 ## Tests

@@ -1,6 +1,7 @@
 # Local dev / tests. Airflow itself runs from the Docker image.
 requests>=2.31
 psycopg2-binary>=2.9
+numpy>=1.26         # salary estimator (transform/salary_model.py)
 pytest>=8
 # transform layer (role 2)
 openpyxl>=3.1        # read the SkillsFuture and SSOC reference xlsx files
