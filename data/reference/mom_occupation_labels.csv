@@ -1,0 +1,6 @@
+mom_label,split,mom_group,group_title
+"professionals, managers, executives and technicians",A,PMET,"Professionals, managers, executives & technicians"
+"clerical, sales and services workers",A,clerical_sales_services,"Clerical, sales & services workers"
+"production and transport operators, cleaners and labourers",A,production_transport,"Production & transport operators, cleaners & labourers"
+"professionals, managers and executives",B,PME,"Professionals, managers & executives"
+"non-professionals, managers and executives",B,non_PME,"Non-PME"
