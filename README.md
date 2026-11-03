@@ -12,6 +12,7 @@ unrealistic requirements.
 | `dags/` | Airflow DAGs (daily ingest, daily transform, weekly metrics) |
 | `ingestion/` | API clients (MyCareersFuture, MOM via data.gov.sg) |
 | `transform/` | Cleaning, deduplication, skill standardisation |
+| `metrics/` | Weekly hiring signals built from the clean layer |
 | `quality/` | Data-quality checks |
 | `sql/init/` | Warehouse schema, applied when the database is first created |
 | `dashboard/` | Dashboard app |
@@ -77,9 +78,15 @@ python -m transform.run --date 2026-10-25                                       
 Design notes and measured numbers: `docs/role2-cleaning-and-warehouse.md`, ER diagram: `docs/er-diagram.md`,
 step-by-step reproduction: `docs/VERIFY-ME.md`.
 
-## MOM vacancy comparison (weekly)
+## Weekly metrics (MOM comparison and hiring signals)
 
-`refresh_mom_stats` → `compare_mcf_with_mom` (`dags/weekly_metrics_dag.py`, Tuesdays 14:00 Singapore time).
+One DAG, `weekly_metrics` (`dags/weekly_metrics_dag.py`, Tuesdays 14:00 Singapore time), with two independent
+branches that read the same week and the same snapshot:
+
+```
+refresh_mom_stats -> compare_mcf_with_mom
+pick_snapshot -> build_posting_week -> 6 signal tables in parallel -> check_and_log
+```
 
 - **refresh_mom_stats** downloads MOM's "Number of Job Vacancy by Occupation - Quarterly" from data.gov.sg
   (`d_86dffa3d28e4c3ee085c3f99abad6e9f`, 1998-Q1 onwards, about 450 rows) with `ingestion/mom_client.py` and
@@ -88,20 +95,34 @@ step-by-step reproduction: `docs/VERIFY-ME.md`.
   the latest snapshot of the run's week vs MOM's share of vacancies in the latest quarter, MOM's 1-year and
   5-year change, and a `disagrees` flag when the shares differ by 10 percentage points or more.
   `metrics.mom_vacancy_trend` is the long MOM series for the trend chart.
+- **pick_snapshot** → **build_posting_week** → six signal tables → **check_and_log** (`metrics/`) fill the tables of
+  `sql/init/05_metrics_signals.sql` from the open postings of the week end (`metrics.posting_week`): barrier
+  skills, skill shortages, unrealistic requirements, competitiveness, skill demand and skill salary.
+  `metrics.run_log` records the week (`week_end_date`, the interval's last day), the snapshot used and the checks.
+  `metrics.mcf_vs_mom_share` above is their MOM validation. Same steps without Airflow:
+  `python -m metrics.run --week-ending 2026-11-03`. Table meanings, thresholds, validation: `docs/weekly-metrics.md`.
 - Each run covers its data interval (Tuesday 14:00 to the next Tuesday 14:00 SGT, so snapshots Wednesday to
-  Tuesday) and fails with the week's dates if that week has no snapshot. `catchup=True` from 20 Oct 2026, so
-  unpausing the DAG backfills one run per week since the first snapshot (24 Oct). A rerun replaces its week's rows.
+  Tuesday), both branches use the latest snapshot of that week (`transform/snapshot_week.py`), and the run fails
+  with the week's dates if that week has no snapshot. `catchup=True` from 20 Oct 2026, so unpausing the DAG
+  backfills one run per week since the first snapshot (24 Oct). A rerun replaces its week's rows.
 - MOM publishes only 3 occupation groups (Split A) and PME vs non-PME (Split B, since 2013), so both sides are
   mapped from the SSOC first digit with `data/reference/ssoc_major_to_mom_group.csv` and
   `data/reference/mom_occupation_labels.csv`. Postings with no usable SSOC code are counted in an `unknown` row
   and left out of the shares.
 
-On a warehouse created before this change, add the tables once by hand (the file is safe to run twice):
+On a warehouse created before these tables existed (the collector laptop), add them once by hand, then let
+compose recreate the Airflow containers for the new `./metrics` mount. Every file is safe to run twice. Never
+`docker compose down -v`: it deletes the warehouse volume. Full steps, including how to fill the weeks the DAG
+already ran: `docs/weekly-metrics.md`, section 3.
 
 ```bash
 docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/03_mom_vacancies.sql
+docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/05_metrics_signals.sql
+docker compose up -d
 # Windows PowerShell:
 Get-Content sql/init/03_mom_vacancies.sql | docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+Get-Content sql/init/05_metrics_signals.sql | docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+docker compose up -d
 ```
 
 Without Airflow: `python -m transform.mom_vacancies` (or `--skip-download` to rebuild only the comparison;
