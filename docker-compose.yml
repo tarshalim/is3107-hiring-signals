@@ -20,6 +20,7 @@ x-airflow-volumes: &airflow-volumes
   - ./ingestion:/opt/airflow/ingestion
   - ./transform:/opt/airflow/transform
   - ./quality:/opt/airflow/quality
+  - ./metrics:/opt/airflow/metrics
   - ./sql:/opt/airflow/sql
   - ./data:/opt/airflow/data
   - ./logs:/opt/airflow/logs
