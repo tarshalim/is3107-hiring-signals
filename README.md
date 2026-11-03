@@ -54,6 +54,22 @@ docker compose exec warehouse psql -U jobs -d jobs -c \
 
 `catchup=False`: view and application counts can't be fetched for past days, so the DAG never backfills.
 
+## Near-real-time feed (every 30 minutes)
+
+`fetch_newest → load_poll → check_poll` (`dags/mcf_live_poll_dag.py`, DAG `mcf_live_poll`).
+
+- Reads the first `MCF_LIVE_PAGES` pages (default 3, so 300 postings) of the same newest-first list, 2 s between
+  pages, and appends one slim row per posting per poll to `raw.mcf_live_poll` (key `(poll_ts, job_uuid)`, never
+  updated). 144 API calls and about 5 MB a day.
+- `check_poll` runs 8 checks (rows present, all stored, no duplicate keys, counters, list order, pages out of step,
+  missed polls) into `raw.mcf_live_poll_dq`.
+- `metrics.live_first24h_summary` and `metrics.live_first24h_curve` give views and applications by hours since
+  posting (1, 6, 12, 24 h) by category and SSOC major group; `metrics.live_poll_status` shows one line per poll.
+
+Why 30-minute polling and not Kafka, numbers, the first real poll and deploy steps: `docs/live-feed.md`.
+On an existing warehouse: apply `sql/init/06_live_poll.sql` once, `docker compose up -d`, unpause `mcf_live_poll`
+(commands in `docs/live-feed.md`, section 5).
+
 ## Daily cleaning and warehouse load (role 2)
 
 `wait_for_raw` + `load_reference_tables` → `transform_snapshot` → `run_quality_checks` → `log_run_stats`
