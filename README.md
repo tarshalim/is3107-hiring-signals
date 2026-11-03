@@ -128,6 +128,33 @@ docker compose up -d
 Without Airflow: `python -m transform.mom_vacancies` (or `--skip-download` to rebuild only the comparison;
 `--week-ending 2026-10-27` for a past week, default today).
 
+## Extra data (`ext` schema)
+
+Ten daily snapshots are a short window, so `sql/init/04_ext_schema.sql` adds three sources that widen it
+(details, licences, row counts and findings: `docs/extra-data.md`):
+
+- **2019 MyCareersFuture crawl** (Kaggle, 20,296 postings) for "2019 vs now" on skills and pay
+- **MOM wage tables** (data.gov.sg API): actual wages for 562 SSOC occupations (June 2024), and median
+  income by occupation group 2001 to 2024
+- **Posting history** rebuilt from the posting dates inside our own snapshots: weekly new postings per skill
+  and per SSOC group, with a coverage label per week (only postings still open on 24 Oct can be seen)
+
+```bash
+python -m transform.posting_history                                   # after the daily transform
+python -m ingestion.datagov_wages                                     # downloads through the official API
+curl -L -o data/ext/kaggle_mcf2019/archive.zip --create-dirs   https://www.kaggle.com/api/v1/datasets/download/asrsaiteja/mycareerfuture-job-postings
+python -m ingestion.kaggle_mcf2019 data/ext/kaggle_mcf2019/archive.zip
+```
+
+The `weekly_ext_data` DAG (`dags/weekly_ext_data_dag.py`, Mondays 12:00) runs the same steps every week. On a
+warehouse created before this file existed, apply it once (safe to run twice), then unpause the DAG:
+
+```bash
+docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/04_ext_schema.sql
+# Windows PowerShell:
+Get-Content sql/init/04_ext_schema.sql | docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+```
+
 ## Tests
 
 ```bash
