@@ -61,8 +61,8 @@ docker compose exec warehouse psql -U jobs -d jobs -c \
 - Reads the first `MCF_LIVE_PAGES` pages (default 3, so 300 postings) of the same newest-first list, 2 s between
   pages, and appends one slim row per posting per poll to `raw.mcf_live_poll` (key `(poll_ts, job_uuid)`, never
   updated). 144 API calls and about 5 MB a day.
-- `check_poll` runs 8 checks (rows present, all stored, no duplicate keys, counters, list order, pages out of step,
-  missed polls) into `raw.mcf_live_poll_dq`.
+- `check_poll` runs 9 checks (rows present, all stored, no duplicate keys, counters, list order, pages out of step,
+  missed polls, and the share of pages the API served unchanged from its cache) into `raw.mcf_live_poll_dq`.
 - `metrics.live_first24h_summary` and `metrics.live_first24h_curve` give views and applications by hours since
   posting (1, 6, 12, 24 h) by category and SSOC major group; `metrics.live_poll_status` shows one line per poll.
 

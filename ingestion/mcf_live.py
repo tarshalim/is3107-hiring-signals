@@ -10,6 +10,7 @@ about 250 bytes instead of the 7.7 KB full JSON. dags/mcf_live_poll_dag.py runs 
 fetch to a small gz file, append the rows to raw.mcf_live_poll, then check them.
 """
 import gzip
+import hashlib
 import json
 import time
 from datetime import date, datetime, timezone
@@ -91,25 +92,37 @@ def _totals(row: dict) -> tuple:
     return (row["views"] or 0, row["applications"] or 0)
 
 
+def page_signature(jobs: list) -> str:
+    """16 hex characters that change whenever the page's postings, their order or their counters change."""
+    content = [(j.get("uuid"), (j.get("metadata") or {}).get("totalNumberOfView"),
+                (j.get("metadata") or {}).get("totalNumberJobApplication")) for j in jobs]
+    return hashlib.md5(json.dumps(content).encode("utf-8")).hexdigest()[:16]
+
+
 def poll_newest(max_pages: int = DEFAULT_PAGES, pause: float = DEFAULT_PAUSE, session=None, now=None):
     """Fetch the first `max_pages` pages once. Returns (rows, stats).
 
     poll_ts is the time the poll started (UTC, whole seconds); every row of the poll carries it, so it
     is the poll's identity.
 
-    A posting can show up on two pages: the list moves while we page, and (seen on 3 Nov 2026) the API
-    can serve page 0 from a cache that is 15+ minutes older than pages 1 and 2. The posting is kept
-    once, from the copy with the higher running totals: totals never fall, so that copy is the fresher one.
+    The API caches each page (seen on 3 Nov 2026: page 0 unchanged for 53 minutes, and pages of different
+    ages in one poll). So:
+      - a posting on two pages is kept once, from the copy with the higher running totals (totals never
+        fall, so that copy is the fresher one);
+      - each page gets a short signature of what it held (uuids and counters, in order). A page whose
+        signature equals an earlier poll's same page is a cached copy with no new information, and the
+        metrics views leave its rows out of the curves.
     """
     session = session or make_session()
     poll_ts = (now or datetime.now(timezone.utc)).replace(microsecond=0)
     start = time.monotonic()
-    rows, position = [], {}
+    rows, position, signatures = [], {}, []
     pages = duplicates = no_uuid = 0
     api_total = None
     for page, total, jobs in iter_jobs(session, max_pages=max_pages, pause=pause):
         pages += 1
         api_total = total
+        signatures.append(page_signature(jobs))
         for i, job in enumerate(jobs):
             uuid = job.get("uuid")
             if not uuid:
@@ -134,6 +147,7 @@ def poll_newest(max_pages: int = DEFAULT_PAGES, pause: float = DEFAULT_PAUSE, se
         "newest_created_at": max(created, key=datetime.fromisoformat) if created else None,
         "oldest_created_at": min(created, key=datetime.fromisoformat) if created else None,
         "seconds_taken": round(time.monotonic() - start, 1),
+        "page_signatures": signatures,
     }
     return rows, stats
 
@@ -176,14 +190,17 @@ def load_poll(conn, stats: dict, rows: list) -> int:
                 """, values, page_size=1000)
             cur.execute("""
                 INSERT INTO raw.mcf_live_poll_runs (poll_ts, pages_fetched, rows_fetched, duplicates_dropped,
-                                                    api_total, newest_created_at, oldest_created_at, seconds_taken)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                                    api_total, newest_created_at, oldest_created_at, seconds_taken,
+                                                    page_signatures)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (poll_ts) DO UPDATE SET
                     pages_fetched = EXCLUDED.pages_fetched, rows_fetched = EXCLUDED.rows_fetched,
                     duplicates_dropped = EXCLUDED.duplicates_dropped, api_total = EXCLUDED.api_total,
                     newest_created_at = EXCLUDED.newest_created_at, oldest_created_at = EXCLUDED.oldest_created_at,
-                    seconds_taken = EXCLUDED.seconds_taken, finished_at = now()
+                    seconds_taken = EXCLUDED.seconds_taken, page_signatures = EXCLUDED.page_signatures,
+                    finished_at = now()
             """, (poll_ts, stats["pages_fetched"], stats["rows_fetched"], stats["duplicates_dropped"],
-                  stats["api_total"], stats["newest_created_at"], stats["oldest_created_at"], stats["seconds_taken"]))
+                  stats["api_total"], stats["newest_created_at"], stats["oldest_created_at"], stats["seconds_taken"],
+                  list(stats.get("page_signatures") or [])))
             cur.execute("SELECT count(*) FROM raw.mcf_live_poll WHERE poll_ts = %s", (poll_ts,))
             return cur.fetchone()[0]

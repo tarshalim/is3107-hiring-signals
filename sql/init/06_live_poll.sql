@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS raw.mcf_live_poll_runs (
     newest_created_at   TIMESTAMPTZ,
     oldest_created_at   TIMESTAMPTZ,            -- how far back the polled pages reached
     seconds_taken       NUMERIC     NOT NULL,
+    -- 16-hex signature of each page as served (uuids and counters in order). The API caches pages (page 0 was
+    -- unchanged for 53 minutes on 3 Nov 2026), so a page equal to an earlier poll's same page is a cached copy
+    -- with no new information. The curve views skip those rows; raw keeps them as evidence.
+    page_signatures     TEXT[],
     finished_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -69,6 +73,17 @@ CREATE TABLE IF NOT EXISTS raw.mcf_live_poll_dq (
 -- ---------------------------------------------------------------------------------------------
 -- Derived views (always in step with the raw rows; small enough not to need a table)
 -- ---------------------------------------------------------------------------------------------
+
+-- One row per page per poll: was it a cached copy of an earlier poll's same page (within a day)?
+CREATE OR REPLACE VIEW metrics.live_poll_pages AS
+SELECT r.poll_ts,
+       (s.i - 1)::int AS page,
+       s.sig          AS page_signature,
+       EXISTS (SELECT 1 FROM raw.mcf_live_poll_runs e
+                WHERE e.poll_ts < r.poll_ts AND e.poll_ts >= r.poll_ts - interval '1 day'
+                  AND e.page_signatures[s.i] = s.sig) AS unchanged_from_earlier_poll
+FROM raw.mcf_live_poll_runs r
+CROSS JOIN LATERAL unnest(r.page_signatures) WITH ORDINALITY AS s(sig, i);
 
 -- Postings the live poll caught while brand new: first seen within 1 hour of createdAt and not a repost.
 -- Only these have a curve that starts near hour 0. Group labels come from the first sighting.
@@ -99,7 +114,8 @@ WHERE f.created_at IS NOT NULL
 
 -- Every observation of a tracked posting in its first 24.5 hours. Two sources:
 --   live  : each 30-minute poll while the posting is on the polled pages (about 1.5 to 2 hours by day with
---           3 pages, longer at night when fewer postings arrive)
+--           3 pages, longer at night when fewer postings arrive). Rows from a page the API served unchanged
+--           from an earlier poll (its cache) are left out: they would show old counters at a later age.
 --   daily : the 10:00 crawl's snapshot of the same posting (clean.fact_job_day). That crawl also pages
 --           newest first, so a day-old posting is fetched in its first minute or two; its time is taken as
 --           the crawl's start (raw.ingest_runs.finished_at minus the fetch seconds), good to a couple of minutes.
@@ -112,6 +128,8 @@ obs AS (
     SELECT p.job_uuid, 'live'::text AS source, p.poll_ts AS observed_at, p.views, p.applications
     FROM raw.mcf_live_poll p
     JOIN tracked t ON t.job_uuid = p.job_uuid
+    LEFT JOIN metrics.live_poll_pages pg ON pg.poll_ts = p.poll_ts AND pg.page = p.list_rank / 100
+    WHERE NOT COALESCE(pg.unchanged_from_earlier_poll, false)
     UNION ALL
     SELECT f.job_uuid, 'daily'::text, i.finished_at - i.seconds_taken * interval '1 second',
            f.views_total, f.applications_total
@@ -198,6 +216,8 @@ SELECT r.poll_ts AT TIME ZONE 'Asia/Singapore'                                  
        round((extract(epoch FROM r.poll_ts - r.oldest_created_at) / 3600)::numeric, 2)     AS hours_covered,
        r.pages_fetched,
        r.duplicates_dropped                                                                AS postings_on_two_pages,
+       (SELECT count(*) FROM metrics.live_poll_pages pg
+         WHERE pg.poll_ts = r.poll_ts AND pg.unchanged_from_earlier_poll)                    AS pages_unchanged,
        r.seconds_taken,
        (SELECT count(*) FROM raw.mcf_live_poll_dq d WHERE d.poll_ts = r.poll_ts AND d.status = 'fail') AS checks_failed,
        (SELECT count(*) FROM raw.mcf_live_poll_dq d WHERE d.poll_ts = r.poll_ts AND d.status = 'warn') AS checks_warned

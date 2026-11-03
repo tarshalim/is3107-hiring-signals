@@ -7,8 +7,8 @@ def test_checks_are_well_formed_and_cover_the_basics():
     assert len(names) == len(set(names))
     assert {"poll_rows_present", "poll_duplicate_keys", "poll_rows_equal_fetched"} <= set(names)
     for c in lpc.LIVE_CHECKS:
-        assert c.severity in {"fail", "warn"}
-        assert c.category in {"schema", "range", "business_rule"}
+        assert c.severity in {"fail", "warn", "info"}
+        assert c.category in {"schema", "range", "business_rule", "info"}
         assert c.op in {"<=", ">=", "=="}
         assert c.sql.lstrip().upper().startswith("SELECT")
         assert "%(t)s" in c.sql and "%(d)s" not in c.sql            # keyed on the poll, not the day
@@ -53,7 +53,7 @@ def _answers(**overrides):
     """A healthy poll: 300 rows, all stored, no duplicates, nothing odd, 30 minutes since the last poll."""
     base = {"poll_rows_present": 300, "poll_rows_equal_fetched": 0, "poll_duplicate_keys": 0,
             "counters_missing_or_negative": 0, "counters_fell_since_prev_poll": 0, "list_newest_first": 0.0,
-            "pages_out_of_step_share": 0.0, "minutes_since_prev_poll": 30}
+            "pages_out_of_step_share": 0.0, "minutes_since_prev_poll": 30, "pages_unchanged_share": 0.0}
     base.update(overrides)
     return [base[c.name] for c in lpc.LIVE_CHECKS]
 
@@ -89,6 +89,13 @@ def test_a_cached_page_0_is_flagged_but_does_not_fail(monkeypatch):
     monkeypatch.setattr(lpc, "execute_values", lambda cur, sql, rows: None)
     results = lpc.run_live_checks(FakeConn(_answers(pages_out_of_step_share=66 / 300)), "t")
     assert lpc.summarise(results)["warned"] == ["pages_out_of_step_share"] and lpc.failed_checks(results) == []
+
+
+def test_a_poll_served_entirely_from_cache_is_recorded_not_failed(monkeypatch):
+    """3 Nov 2026, second real poll: all 3 pages were identical to the poll 36 minutes earlier."""
+    monkeypatch.setattr(lpc, "execute_values", lambda cur, sql, rows: None)
+    results = {r.name: r for r in lpc.run_live_checks(FakeConn(_answers(pages_unchanged_share=1.0)), "t")}
+    assert results["pages_unchanged_share"].status == "pass" and results["pages_unchanged_share"].observed == 1.0
 
 
 def test_first_poll_ever_warns_instead_of_failing(monkeypatch):

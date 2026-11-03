@@ -25,7 +25,8 @@ TEST_DB = "is3107_test_live"
 UTC = timezone.utc
 T0 = datetime(2026, 11, 3, 2, 15, tzinfo=UTC)                     # 10:15 SGT
 POLLS = [T0, T0 + timedelta(minutes=30), T0 + timedelta(minutes=60), T0 + timedelta(minutes=90),
-         datetime(2026, 11, 3, 8, 5, tzinfo=UTC)]                 # the last one comes after a 4 h 20 min gap
+         T0 + timedelta(minutes=110),                             # the API's cache: same pages as 20 minutes before
+         datetime(2026, 11, 3, 8, 5, tzinfo=UTC)]                 # the last one comes after a 4-hour gap
 
 
 @pytest.fixture(scope="module")
@@ -76,10 +77,10 @@ def _job(uuid, created, views, apps, category, ssoc, repost=0):
 A, B, C, D = "a" * 32, "b" * 32, "c" * 32, "d" * 32
 # (views, applications) per poll; None = not on the polled pages any more.
 SERIES = {
-    A: [(1, 0), (5, 0), (9, 1), (14, 2), (30, 3)],     # created 10:00 SGT, IT, a professional
-    B: [(0, 0), (2, 0), (3, 0), (6, 1), None],         # created 10:10 SGT, F&B, a service worker
-    C: [(50, 4), (50, 4), (50, 4), (49, 4), (49, 4)],  # created the night before: too old to track; views fall once
-    D: [(90, 9), (91, 9), (92, 9), (93, 9), None],     # a repost: not tracked
+    A: [(1, 0), (5, 0), (9, 1), (14, 2), (14, 2), (30, 3)],      # created 10:00 SGT, IT, a professional
+    B: [(0, 0), (2, 0), (3, 0), (6, 1), (6, 1), None],           # created 10:10 SGT, F&B, a service worker
+    C: [(50, 4), (50, 4), (50, 4), (49, 4), (49, 4), (49, 4)],   # created the night before: too old; views fall once
+    D: [(90, 9), (91, 9), (92, 9), (93, 9), (93, 9), None],      # a repost: not tracked
 }
 META = {A: ("2026-11-03T02:00:00.000Z", "Information Technology", "25121", 0),
         B: ("2026-11-03T02:10:00.000Z", "F&B", "51202", 0),
@@ -121,16 +122,17 @@ def test_polls_load_idempotently_and_pass_checks(conn, monkeypatch):
         statuses = {name: r.status for name, r in results.items()}
         if i == 0:
             assert statuses["minutes_since_prev_poll"] == "warn"            # first poll: nothing to compare with
-        elif i == 4:
-            assert statuses["minutes_since_prev_poll"] == "warn"            # the 4 h 20 min gap is flagged
-            assert results["minutes_since_prev_poll"].observed == 260
+        elif i == 5:
+            assert statuses["minutes_since_prev_poll"] == "warn"            # the 4-hour gap is flagged
+            assert results["minutes_since_prev_poll"].observed == 240
         else:
             assert statuses["minutes_since_prev_poll"] == "pass"
         assert statuses["counters_fell_since_prev_poll"] == ("warn" if i == 3 else "pass")   # C's views fell
         assert statuses["list_newest_first"] == "pass" and statuses["poll_duplicate_keys"] == "pass"
-    assert _one(conn, "SELECT count(*) FROM raw.mcf_live_poll")[0] == 4 * 4 + 2
-    assert _one(conn, "SELECT count(*) FROM raw.mcf_live_poll_runs")[0] == 5
-    assert _one(conn, "SELECT count(*) FROM raw.mcf_live_poll_dq")[0] == 5 * len(LIVE_CHECKS)
+        assert results["pages_unchanged_share"].observed == (1.0 if i == 4 else 0.0)   # poll 4 is a cached copy
+    assert _one(conn, "SELECT count(*) FROM raw.mcf_live_poll")[0] == 4 * 5 + 2      # raw keeps the cached copy too
+    assert _one(conn, "SELECT count(*) FROM raw.mcf_live_poll_runs")[0] == 6
+    assert _one(conn, "SELECT count(*) FROM raw.mcf_live_poll_dq")[0] == 6 * len(LIVE_CHECKS)
 
 
 def test_only_brand_new_postings_are_tracked(conn):
@@ -156,6 +158,7 @@ def test_daily_crawl_extends_the_curve_to_24_hours(conn):
                            VALUES ('2026-11-04', %s, %s, 20261104, %s, %s, 0, 0, true)""", (uuid, key, views, apps))
     points = _all(conn, "SELECT job_uuid, source, hours_since_posting, applications FROM metrics.live_curve_points "
                         "ORDER BY job_uuid, observed_at")
+    # No point at 2.08 h for A: the poll at 12:05 SGT was a cached copy of the 11:45 one, so it is left out.
     assert [(s, float(h), a) for u, s, h, a in points if u == A] == [
         ("live", 0.25, 0), ("live", 0.75, 0), ("live", 1.25, 1), ("live", 1.75, 2), ("live", 6.08, 3), ("daily", 24.0, 6)]
     assert [(s, float(h)) for u, s, h, a in points if u == B][-1] == ("daily", 23.83)
@@ -184,6 +187,7 @@ def test_status_view_for_the_demo(conn):
                          FROM metrics.live_poll_status ORDER BY poll_time_sgt""")
     assert rows[0] == (4, 4, 5.0, 0, 1)         # first poll: everything is new; newest (B) went live 5 min before
     assert rows[1][:2] == (4, 0)
-    assert rows[4][:2] == (2, 0)
+    assert rows[5][:2] == (2, 0)
+    assert [r[0] for r in _all(conn, "SELECT pages_unchanged FROM metrics.live_poll_status ORDER BY poll_time_sgt")]         == [0, 0, 0, 0, 1, 0]
     assert _one(conn, "SELECT poll_time_sgt FROM metrics.live_poll_status ORDER BY 1 LIMIT 1")[0] == \
         datetime(2026, 11, 3, 10, 15)           # shown in Singapore time

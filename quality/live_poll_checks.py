@@ -2,7 +2,8 @@
 
 Same shape as quality/clean_checks.py: each check is one SQL statement returning one number, tagged
 schema, range or business rule, judged against a threshold, with a severity. `fail` stops the DAG run
-(the rows stay loaded so the problem can be seen), `warn` is recorded only. Verdicts go to
+(the rows stay loaded so the problem can be seen), `warn` is recorded only, `info` puts a number on the
+record (how many pages the API served from its cache). Verdicts go to
 raw.mcf_live_poll_dq, one row per check per poll, so the status view and the report can quote them.
 
 %(t)s is the poll's poll_ts. The first poll ever has no previous poll, so minutes_since_prev_poll has
@@ -50,6 +51,11 @@ LIVE_CHECKS = [
     Check("minutes_since_prev_poll", "business_rule", "warn",
           "SELECT extract(epoch FROM %(t)s::timestamptz - " + _PREV_POLL + ") / 60",
           "<=", 45, "over 45 minutes since the previous poll means at least one poll was missed"),
+    # ---------------- info: a number on the record every poll ----------------
+    Check("pages_unchanged_share", "info", "info",
+          "SELECT avg(CASE WHEN unchanged_from_earlier_poll THEN 1.0 ELSE 0.0 END) FROM metrics.live_poll_pages "
+          "WHERE poll_ts = %(t)s",
+          ">=", 0, "share of pages identical to an earlier poll's (served from the API's cache; 1.0 = nothing new)"),
 ]
 
 

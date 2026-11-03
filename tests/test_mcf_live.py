@@ -83,6 +83,17 @@ def test_poll_reads_only_the_first_pages_with_a_pause(monkeypatch):
     assert stats["newest_created_at"] == "2026-11-03T04:50:00+00:00"
     assert stats["oldest_created_at"] == "2026-11-03T04:45:00+00:00"
     assert stats["api_total"] == 20
+    assert len(stats["page_signatures"]) == 3 and len(set(stats["page_signatures"])) == 3
+
+
+def test_page_signature_changes_with_counters_and_order_only():
+    t = "2026-11-03T04:50:00.000Z"
+    page = [_job("a", t, views=1), _job("b", t, views=0)]
+    same = [_job("a", t, views=1, title="edited title"), _job("b", t, views=0)]
+    assert mcf_live.page_signature(page) == mcf_live.page_signature(same)          # a cached copy matches
+    assert mcf_live.page_signature(page) != mcf_live.page_signature([_job("a", t, views=2), _job("b", t)])
+    assert mcf_live.page_signature(page) != mcf_live.page_signature(page[::-1])
+    assert len(mcf_live.page_signature(page)) == 16
 
 
 def test_poll_keeps_a_posting_once_when_the_list_shifts(monkeypatch):
@@ -168,7 +179,8 @@ def test_load_poll_appends_idempotently_and_logs_the_run(monkeypatch):
             for i, (u, v) in enumerate([("a", 5), ("b", 0)])]
     stats = {"poll_ts": "2026-11-03T04:55:07+00:00", "pages_fetched": 1, "rows_fetched": 2, "duplicates_dropped": 0,
              "api_total": 90051, "newest_created_at": "2026-11-03T04:50:00+00:00",
-             "oldest_created_at": "2026-11-03T04:50:00+00:00", "seconds_taken": 1.6}
+             "oldest_created_at": "2026-11-03T04:50:00+00:00", "seconds_taken": 1.6,
+             "page_signatures": ["0123456789abcdef"]}
     conn = FakeConn()
     assert mcf_live.load_poll(conn, stats, rows) == 2
     assert "ON CONFLICT (poll_ts, job_uuid) DO NOTHING" in captured["sql"]
@@ -177,4 +189,4 @@ def test_load_poll_appends_idempotently_and_logs_the_run(monkeypatch):
     assert len(captured["values"][0]) == 1 + len(mcf_live.COLUMNS)
     run_sql, run_params = conn.cur.executed[0]
     assert "raw.mcf_live_poll_runs" in run_sql and "ON CONFLICT (poll_ts)" in run_sql
-    assert run_params[0] == stats["poll_ts"] and run_params[2] == 2
+    assert run_params[0] == stats["poll_ts"] and run_params[2] == 2 and run_params[-1] == ["0123456789abcdef"]

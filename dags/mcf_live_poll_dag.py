@@ -19,6 +19,8 @@ Design (L7, and the "justify it, do not over-build it" point from the streaming 
   - catchup=False: a missed poll cannot be fetched later (the counters have moved on). max_active_runs=1 and
     dagrun_timeout=25 min, so a slow run (API backing off) never overlaps the next one.
   - quality: check_poll stores its verdicts in raw.mcf_live_poll_dq and fails the run on a 'fail' check.
+  - the API caches pages (3 Nov 2026: page 0 unchanged for 53 minutes), so each page's signature is stored and
+    the metrics views skip pages that are unchanged copies of an earlier poll. See docs/live-feed.md.
 """
 import json
 import os
