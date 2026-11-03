@@ -9,7 +9,7 @@ unrealistic requirements.
 
 | Folder | What goes there |
 |---|---|
-| `dags/` | Airflow DAGs (daily ingest, daily transform, weekly metrics) |
+| `dags/` | Airflow DAGs (daily ingest, 30-minute live poll, daily transform, weekly metrics) |
 | `ingestion/` | API clients (MyCareersFuture, MOM via data.gov.sg) |
 | `transform/` | Cleaning, deduplication, skill standardisation |
 | `metrics/` | Weekly hiring signals built from the clean layer |

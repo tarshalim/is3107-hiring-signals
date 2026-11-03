@@ -3,7 +3,7 @@
     WAREHOUSE_TEST_DSN=postgresql://jobs:<pw>@localhost:5433/jobs pytest tests/test_integration_live_poll.py -v
 
 Creates its own scratch database `is3107_test_live` (not `is3107_test`, so it never collides with
-tests/test_integration_warehouse.py), applies sql/init/01, 02, 03 and 06 (06 twice: rerunnable), then runs
+tests/test_integration_warehouse.py), applies every sql/init file in order and 06 once more (rerunnable), then runs
 five fake polls through the real poll -> load -> check code and checks the metrics.live_* views by hand-worked
 numbers. No network: the API is a fake session.
 """
@@ -39,9 +39,9 @@ def conn():
     admin.close()
     c = psycopg2.connect(DSN.rpartition("/")[0] + "/" + TEST_DB)
     with c, c.cursor() as cur:
-        for f in ("01_raw_schema.sql", "02_clean_schema.sql", "03_mom_vacancies.sql", "06_live_poll.sql",
-                  "06_live_poll.sql"):
-            cur.execute((REPO / "sql" / "init" / f).read_text(encoding="utf-8"))
+        init = sorted((REPO / "sql" / "init").glob("*.sql"))      # the order the warehouse container uses
+        for f in init + [REPO / "sql" / "init" / "06_live_poll.sql"]:
+            cur.execute(f.read_text(encoding="utf-8"))
     yield c
     c.close()
 
