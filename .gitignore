@@ -12,6 +12,10 @@ venv/
 # raw / bulk data (keep it out of git)
 data/*
 !data/reference/
+# external datasets (docs/extra-data.md says where to download them). Already covered by data/* above,
+# listed so nobody moves them into data/reference/ by mistake. The Kaggle file has no stated licence.
+data/ext/
+mycareersfuture.json
 
 # Airflow local files
 logs/
