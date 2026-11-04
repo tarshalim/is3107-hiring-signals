@@ -207,6 +207,10 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
         FROM metrics.skill_demand WHERE week_end_date = %s AND skill_name = 'Collaboration'""", D3)}
     assert demand[("Collaboration", date(2026, 10, 19))] == (5, 6, Decimal("0.83333"), False)   # f counts: seen, now closed
     assert demand[("Collaboration", date(2026, 10, 26))] == (1, 1, Decimal("1.00000"), False)
+    # SkillsFuture type of each skill: Collaboration is a critical core skill; unmapped tags have none
+    types = dict(_all(conn, "SELECT DISTINCT skill_name, skill_type FROM metrics.skill_demand WHERE week_end_date = %s", D3))
+    assert types["Collaboration"] == "ccs"
+    assert all(t in ("tsc", "ccs", None) for t in types.values())
     assert _one(conn, "SELECT min(salary_mid_median), max(salary_mid_median) FROM metrics.skill_salary WHERE week_end_date = %s",
                 D3) == (Decimal("3850.00"), Decimal("3850.00"))
     # g's $12 to $15 "monthly" salary is left out: Collaboration has 5 open postings but 4 usable salaries

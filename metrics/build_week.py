@@ -109,6 +109,7 @@ _SKILL_NAMES = """
                COALESCE(ssg_skill_id, mcf_skill_uuid)    AS skill_ref,
                COALESCE(ssg_skill_title, mcf_skill_name) AS skill_name,
                ssg_skill_id IS NOT NULL                  AS is_mapped,
+               ssg_skill_type                            AS skill_type,   -- 'tsc' / 'ccs', NULL when not mapped
                COALESCE(is_casl, FALSE)                  AS is_casl
         FROM clean.dim_skill
         ORDER BY COALESCE(ssg_skill_id, mcf_skill_uuid), skill_key
@@ -507,7 +508,7 @@ WHERE st.postings >= ms.min_postings
 # Signal 5a: skill demand by posting week
 # ---------------------------------------------------------------------------------------------
 SKILL_DEMAND_SQL = f"""
-INSERT INTO metrics.skill_demand (week_end_date, snapshot_date, skill_ref, skill_name, is_mapped, posting_week,
+INSERT INTO metrics.skill_demand (week_end_date, snapshot_date, skill_ref, skill_name, is_mapped, skill_type, posting_week,
     week_fully_observed, new_postings, new_vacancies, week_total_postings, share_of_week, salary_mid_median)
 WITH {_SKILL_NAMES},
 seen AS (
@@ -541,7 +542,7 @@ per AS (
     FROM job_skill
     GROUP BY skill_ref, posting_week
 )
-SELECT %(e)s, %(s)s, p.skill_ref, n.skill_name, n.is_mapped, p.posting_week,
+SELECT %(e)s, %(s)s, p.skill_ref, n.skill_name, n.is_mapped, n.skill_type, p.posting_week,
        (p.posting_week >= %(first_snapshot)s AND p.posting_week + 6 <= %(s)s),
        p.new_postings, p.new_vacancies, w.total, round(p.new_postings::numeric / w.total, 5),
        round(p.mid::numeric, 2)

@@ -173,6 +173,15 @@ def test_barrier_compares_within_2_digit_ssoc_groups_with_a_1_digit_fallback():
     assert "ALTER TABLE metrics.posting_week ADD COLUMN IF NOT EXISTS barrier_group TEXT" in SCHEMA
 
 
+def test_skill_demand_carries_the_skillsfuture_skill_type():
+    """'tsc' / 'ccs' from clean.dim_skill.ssg_skill_type, so the dashboard can show technical skills apart."""
+    assert "ssg_skill_type AS skill_type" in " ".join(build_week._SKILL_NAMES.split())
+    sql = " ".join(build_week.SKILL_DEMAND_SQL.split())
+    assert "is_mapped, skill_type, posting_week" in sql and "n.is_mapped, n.skill_type, p.posting_week" in sql
+    assert "skill_type" in _table_blocks(SCHEMA)["skill_demand"]
+    assert "ALTER TABLE metrics.skill_demand ADD COLUMN IF NOT EXISTS skill_type TEXT" in SCHEMA
+
+
 def test_shortage_medians_describe_the_shortage_postings():
     """Review 4 Nov #8: over all postings with the skill, every top skill showed 0.0."""
     sql = " ".join(build_week.SHORTAGE_SQL.split())

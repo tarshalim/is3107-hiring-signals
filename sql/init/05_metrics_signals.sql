@@ -215,6 +215,8 @@ CREATE TABLE IF NOT EXISTS metrics.skill_demand (
     skill_ref            TEXT    NOT NULL,
     skill_name           TEXT    NOT NULL,
     is_mapped            BOOLEAN NOT NULL,
+    skill_type           TEXT,                      -- SkillsFuture type: 'tsc' (technical) or 'ccs' (critical core);
+                                                    -- NULL when the MCF tag is not mapped (is_mapped false)
     posting_week         DATE    NOT NULL,          -- Monday of original_posting_date
     week_fully_observed  BOOLEAN NOT NULL,          -- collection covered the whole posting week
     new_postings         INTEGER NOT NULL,
@@ -276,3 +278,5 @@ ALTER TABLE metrics.barrier_skill  ADD COLUMN IF NOT EXISTS top_company_share NU
 ALTER TABLE metrics.shortage_skill ADD COLUMN IF NOT EXISTS top_company_share NUMERIC(6,4);
 -- barrier compared within 2-digit SSOC groups (1-digit fallback)
 ALTER TABLE metrics.posting_week ADD COLUMN IF NOT EXISTS barrier_group TEXT;
+-- skill demand by SkillsFuture skill type, so technical skills can be shown apart
+ALTER TABLE metrics.skill_demand ADD COLUMN IF NOT EXISTS skill_type TEXT;
