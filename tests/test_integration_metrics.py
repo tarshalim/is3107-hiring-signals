@@ -44,7 +44,7 @@ FETCHED = {D1: datetime(2026, 10, 24, 9, 35, tzinfo=timezone.utc),    # 17:35 SG
            D3: datetime(2026, 10, 26, 2, 23, tzinfo=timezone.utc)}    # 24 hours later
 # a 7-posting fixture cannot meet the real minimum sample sizes
 SMALL = {"skill_min_postings": 1, "group_min_postings": 1, "salary_min_postings": 1,
-         "demand_min_postings": 1, "shortage_min_flagged": 1, "min_companies": 1}
+         "demand_min_postings": 1, "shortage_min_flagged": 1, "barrier_min_flagged": 1, "min_companies": 1}
 METRIC_TABLES = ("posting_week", *SIGNAL_TABLES)
 
 
@@ -84,8 +84,10 @@ def _fixture_days(make_payload):
     c = {"skills": forklift, "ssocCode": "83441", "metadata.repostCount": 2}   # reposted twice, 1 application, many views
     d = {"metadata.repostCount": 1}                            # reposted although it has the most applications
     e = {"positionLevels": [{"id": 2, "position": "Junior Executive"}], "minimumYearsExperience": 1}
+    pack = {"skill": "Pack goods", "uuid": "9" * 32, "confidence": None, "isKeySkill": False}
     g = {"metadata.originalPostingDate": "2026-10-26", "metadata.newPostingDate": "2026-10-26",
-         "salary.minimum": 12, "salary.maximum": 15}           # an hourly rate typed as monthly: not a usable salary
+         "salary.minimum": 12, "salary.maximum": 15,           # an hourly rate typed as monthly: not a usable salary
+         "skills": make_payload()["skills"] + [pack]}          # the only posting with "Pack goods" (barrier test)
     return {
         D1: [p("a", 100, 5, a), p("b", 50, 1, b), p("c", 400, 1, c), p("d", 1000, 300, d), p("e", 10, 0, e),
              p("f", 80, 3)],
@@ -162,9 +164,23 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
     assert _one(conn, """SELECT postings FROM metrics.competitiveness WHERE week_end_date = %s
                          AND group_type = 'skill' AND group_label = 'Collaboration'""", D3) == (5,)
 
-    # barrier: Forklift postings get 500 views (above the 346.7 average) and 1 application
-    barrier = _all(conn, "SELECT skill_name, rate_vs_overall FROM metrics.barrier_skill WHERE week_end_date = %s AND is_barrier", D3)
-    assert len(barrier) == 1 and "Forklift" in barrier[0][0] and barrier[0][1] < Decimal("0.1")
+    # barrier postings, judged within the SSOC major group. Group 2 (a, b, d, e, g) views per day on D3:
+    # e 30/2, b 70/2, a 160/2, g 120/1, d 1200/2 = 15, 35, 80, 120, 600 -> P75 120. The group's applications
+    # per view are 339 / 1580 = 0.215, so at most 0.8 x 0.215 = 0.172: g (7/120 = 0.058) yes, d (0.267) no.
+    # c is alone in group 8, so its rate IS the group's rate: never a barrier posting, however many views.
+    assert _all(conn, """SELECT left(job_uuid, 1) FROM metrics.posting_week
+                         WHERE week_end_date = %s AND is_barrier_posting""", D3) == [("g",)]
+    assert _one(conn, """SELECT views_per_day_since_posting FROM metrics.posting_week
+                         WHERE week_end_date = %s AND job_uuid = %s""", D3, "g" * 32) == (Decimal("120.0000"),)
+    # barrier skills: group 2 has 1 barrier posting in 5 (0.2). "Pack goods" is only on g: share 1.0 against an
+    # expected 0.2, lift 5. Skills on all five group-2 postings (Collaboration, Nursing) show exactly the
+    # expected 0.2, lift 1: the occupation alone does not make them barriers.
+    barrier = _all(conn, """SELECT postings, barrier_postings, barrier_share, expected_share, lift FROM metrics.barrier_skill
+                            WHERE week_end_date = %s AND is_barrier""", D3)
+    assert barrier == [(1, 1, Decimal("1.0000"), Decimal("0.2000"), Decimal("5.000"))]
+    assert _one(conn, """SELECT barrier_share, lift FROM metrics.barrier_skill
+                         WHERE week_end_date = %s AND skill_name = 'Collaboration'""", D3) \
+        == (Decimal("0.2000"), Decimal("1.000"))
     # shortage: c is the only flagged posting (1 of 6), so its skill has lift 6
     assert _all(conn, """SELECT shortage_postings, lift, median_repost_count, median_applications
                          FROM metrics.shortage_skill WHERE week_end_date = %s""", D3) \

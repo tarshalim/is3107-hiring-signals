@@ -90,8 +90,11 @@ CREATE TABLE IF NOT EXISTS metrics.posting_week (
     repost_count           SMALLINT NOT NULL,
     days_since_original_posting SMALLINT,
     apps_per_day_since_posting  NUMERIC(12,4),      -- applications_total / max(days since original posting, 1)
+    views_per_day_since_posting NUMERIC(12,4),      -- views_total / max(days since original posting, 1)
     is_shortage            BOOLEAN  NOT NULL,       -- reposted repeatedly and still few applications
     is_reposted_many_apps  BOOLEAN  NOT NULL,       -- reposted although it draws many applications per day (week's P90)
+    is_barrier_posting     BOOLEAN  NOT NULL,       -- views per day at or above its SSOC major group's P75, but applications
+                                                    -- per view at most thresholds.barrier_max_rate_ratio x the group's
     is_entry_2plus         BOOLEAN  NOT NULL,       -- "Fresh/entry level" position asking 2+ years
     is_junior_2plus        BOOLEAN  NOT NULL,       -- "Junior Executive" position asking 2+ years (kept apart: a far higher share)
     PRIMARY KEY (week_end_date, job_uuid)
@@ -103,7 +106,9 @@ CREATE TABLE IF NOT EXISTS metrics.posting_week (
 -- both counts once.
 -- ---------------------------------------------------------------------------------------------
 
--- Signal 1, barrier skills: which skills attract views but put applicants off?
+-- Signal 1, barrier skills: which skills sit in postings people look at a lot and then do not apply to,
+-- compared with similar jobs? A posting-level flag (posting_week.is_barrier_posting, judged within its
+-- SSOC major group) and a lift, like shortage_skill.
 CREATE TABLE IF NOT EXISTS metrics.barrier_skill (
     week_end_date       DATE    NOT NULL,
     snapshot_date       DATE    NOT NULL,
@@ -113,14 +118,18 @@ CREATE TABLE IF NOT EXISTS metrics.barrier_skill (
     is_casl             BOOLEAN NOT NULL,
     postings            INTEGER NOT NULL,           -- open postings with the skill (at least thresholds.skill_min_postings)
     companies           INTEGER NOT NULL,           -- distinct employers among them (at least thresholds.min_companies)
+    barrier_postings    INTEGER NOT NULL,           -- of those, posting_week.is_barrier_posting
+    barrier_companies   INTEGER NOT NULL,           -- employers behind the barrier postings
+    barrier_share       NUMERIC(8,4),               -- barrier_postings / postings
+    expected_share      NUMERIC(8,4),               -- the share if each posting behaved like its SSOC major group's average
+    lift                NUMERIC(10,3),              -- barrier_share / expected_share. 2 = twice as common as its occupations predict
     views               BIGINT  NOT NULL,
     applications        BIGINT  NOT NULL,
-    views_per_posting   NUMERIC(12,1),
-    apply_rate          NUMERIC(10,5),              -- applications / views for postings with the skill
+    apply_rate          NUMERIC(10,5),              -- applications / views for postings with the skill (descriptive)
     overall_apply_rate  NUMERIC(10,5),              -- applications / views over all open postings
     rate_vs_overall     NUMERIC(10,3),              -- apply_rate / overall_apply_rate. 0.6 = 40% fewer applications per view
-    views_vs_overall    NUMERIC(10,3),              -- views_per_posting / overall views per posting
-    is_barrier          BOOLEAN NOT NULL,           -- views_vs_overall >= 1 and rate_vs_overall <= thresholds.barrier_max_rate_ratio
+    is_barrier          BOOLEAN NOT NULL,           -- lift >= thresholds.barrier_min_lift, with barrier_min_flagged barrier
+                                                    -- postings from min_companies employers
     PRIMARY KEY (week_end_date, skill_ref)
 );
 
@@ -242,3 +251,16 @@ ALTER TABLE metrics.posting_week ADD COLUMN IF NOT EXISTS is_junior_2plus BOOLEA
 ALTER TABLE metrics.posting_week ALTER COLUMN is_entry_2plus  DROP DEFAULT;
 ALTER TABLE metrics.posting_week ALTER COLUMN is_junior_2plus DROP DEFAULT;
 ALTER TABLE metrics.posting_week DROP COLUMN IF EXISTS is_entry_level_2plus;
+-- #6: barrier skills on views per day, judged within the SSOC major group, with a lift
+ALTER TABLE metrics.posting_week ADD COLUMN IF NOT EXISTS views_per_day_since_posting NUMERIC(12,4);
+ALTER TABLE metrics.posting_week ADD COLUMN IF NOT EXISTS is_barrier_posting BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE metrics.posting_week ALTER COLUMN is_barrier_posting DROP DEFAULT;
+ALTER TABLE metrics.barrier_skill ADD COLUMN IF NOT EXISTS barrier_postings  INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE metrics.barrier_skill ADD COLUMN IF NOT EXISTS barrier_companies INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE metrics.barrier_skill ALTER COLUMN barrier_postings  DROP DEFAULT;
+ALTER TABLE metrics.barrier_skill ALTER COLUMN barrier_companies DROP DEFAULT;
+ALTER TABLE metrics.barrier_skill ADD COLUMN IF NOT EXISTS barrier_share  NUMERIC(8,4);
+ALTER TABLE metrics.barrier_skill ADD COLUMN IF NOT EXISTS expected_share NUMERIC(8,4);
+ALTER TABLE metrics.barrier_skill ADD COLUMN IF NOT EXISTS lift           NUMERIC(10,3);
+ALTER TABLE metrics.barrier_skill DROP COLUMN IF EXISTS views_per_posting;   -- raw views per posting: favoured old postings
+ALTER TABLE metrics.barrier_skill DROP COLUMN IF EXISTS views_vs_overall;

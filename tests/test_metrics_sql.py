@@ -128,6 +128,20 @@ def test_entry_level_and_junior_are_separate_posting_flags():
     assert "DROP COLUMN IF EXISTS is_entry_level_2plus" in SCHEMA
 
 
+def test_barrier_uses_views_per_day_within_the_ssoc_group_and_a_lift():
+    """Review 4 Nov #6: raw views favoured old postings, and comparing with ALL postings let occupation decide."""
+    posting = " ".join(build_week.BARRIER_POSTING_SQL.split())
+    assert "ORDER BY views_per_day_since_posting" in posting and "GROUP BY ssoc_major_group" in posting
+    assert "views_total)::numeric / NULLIF(count(*)" not in build_week.BARRIER_SQL     # no raw views per posting
+    assert "lift >= %(barrier_min_lift)s" in " ".join(build_week.BARRIER_SQL.split())
+    cols = _table_blocks(SCHEMA)["barrier_skill"]
+    assert "views_vs_overall" not in cols and "views_per_posting" not in cols
+    assert "DROP COLUMN IF EXISTS views_vs_overall" in SCHEMA
+    t = THRESHOLDS
+    assert (t["barrier_views_percentile"], t["barrier_max_rate_ratio"], t["barrier_min_lift"],
+            t["barrier_min_flagged"]) == (0.75, 0.8, 1.5, 25)
+
+
 def test_shortage_medians_describe_the_shortage_postings():
     """Review 4 Nov #8: over all postings with the skill, every top skill showed 0.0."""
     sql = " ".join(build_week.SHORTAGE_SQL.split())

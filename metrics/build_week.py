@@ -22,6 +22,8 @@ Definitions shared by all signals:
   - running totals (views_total, applications_total) are semi-additive: only the latest value per
     posting is used, never a sum across days. Day-over-day increases are summed, and normalised to
     24 hours with hours_since_prev because runs were 17 to 28 hours apart.
+  - "many applications" and "many views" are per day since the original posting date, never raw
+    totals, so older postings are not favoured (review 4 Nov, #5 and #6).
   - skill_ref groups a skill by its SkillsFuture id when the MCF tag is mapped, else by the MCF tag,
     and a posting counts once per skill_ref.
   - minimum sample sizes come from THRESHOLDS and are stored with every run in metrics.run_log.
@@ -52,8 +54,14 @@ THRESHOLDS = {
     # 100,000 are annual figures
     "salary_floor": 300,
     "salary_ceiling": 100000,
-    # barrier skills: at least 20% fewer applications per view than the average open posting
+    # barrier skills (review 4 Nov #6: views per day, compared within the same SSOC major group). A barrier POSTING
+    # is among the most viewed per day in its SSOC major group (the group's P75 or more) but gets at most 0.8 times
+    # the group's applications per view. A barrier SKILL turns up in barrier postings at least 1.5 times as often
+    # as its postings' occupation groups would predict (lift), in 25+ barrier postings from min_companies employers
+    "barrier_views_percentile": 0.75,
     "barrier_max_rate_ratio": 0.8,
+    "barrier_min_lift": 1.5,
+    "barrier_min_flagged": 25,
     # skill shortages: reposted at least twice (2 is the highest count seen) and at most 2 applications in total
     # (totals carry over a repost, so 2 in total means at most 2 since the repost: the conservative side)
     "shortage_min_reposts": 2,
@@ -115,7 +123,8 @@ INSERT INTO metrics.posting_week (
     min_years_exp, exp_out_of_range, salary_min, salary_max, salary_mid, salary_usable, vacancies,
     original_posting_date, new_posting_date, expiry_date,
     views_total, applications_total, repost_count, days_since_original_posting, apps_per_day_since_posting,
-    is_shortage, is_reposted_many_apps, is_entry_2plus, is_junior_2plus)
+    views_per_day_since_posting, is_shortage, is_reposted_many_apps, is_barrier_posting, is_entry_2plus,
+    is_junior_2plus)
 WITH latest AS (
     -- each posting's latest sighting on or before the snapshot, inside the gap window
     SELECT DISTINCT ON (f.job_uuid)
@@ -141,8 +150,11 @@ SELECT %(e)s, %(s)s, o.job_uuid, o.job_key, o.snapshot_date, o.snapshot_date = %
        o.views_total, o.applications_total, o.repost_count, o.days_since_original_posting,
        CASE WHEN o.days_since_original_posting IS NOT NULL
             THEN round(o.applications_total::numeric / GREATEST(o.days_since_original_posting, 1), 4) END,
+       CASE WHEN o.days_since_original_posting IS NOT NULL
+            THEN round(o.views_total::numeric / GREATEST(o.days_since_original_posting, 1), 4) END,
        (o.repost_count >= %(shortage_min_reposts)s AND o.applications_total <= %(shortage_max_applications)s),
        FALSE,      -- set below, once the week's P90 of applications per day is known
+       FALSE,      -- set below, once each SSOC major group's views per day and apply rate are known
        -- two separate flags: entry level and junior asking 2+ years (their shares differ several times over)
        (j.position_level = ANY(%(entry_levels)s)
         AND NOT j.exp_out_of_range AND j.min_years_exp BETWEEN %(entry_min_years)s AND %(exp_max_valid)s) IS TRUE,
@@ -150,6 +162,27 @@ SELECT %(e)s, %(s)s, o.job_uuid, o.job_key, o.snapshot_date, o.snapshot_date = %
         AND NOT j.exp_out_of_range AND j.min_years_exp BETWEEN %(entry_min_years)s AND %(exp_max_valid)s) IS TRUE
 FROM open_postings o
 JOIN clean.dim_job j ON j.job_key = o.job_key
+"""
+
+
+# A barrier posting: among the most viewed per day in its own SSOC major group, but few applications per view
+# for that group. Compared within the group so that occupations with many viewers and few applicants anyway
+# (cleaning, packing, driving) do not make every one of their skills look like a barrier.
+BARRIER_POSTING_SQL = """
+WITH grp AS (
+    SELECT ssoc_major_group,
+           percentile_cont(%(barrier_views_percentile)s) WITHIN GROUP (ORDER BY views_per_day_since_posting) AS high_views,
+           sum(applications_total)::numeric / NULLIF(sum(views_total), 0) AS apply_rate
+    FROM metrics.posting_week
+    WHERE week_end_date = %(e)s
+    GROUP BY ssoc_major_group
+)
+UPDATE metrics.posting_week pw
+SET is_barrier_posting = (pw.views_per_day_since_posting >= g.high_views
+                          AND pw.applications_total::numeric / NULLIF(pw.views_total, 0)
+                              <= %(barrier_max_rate_ratio)s * g.apply_rate) IS TRUE
+FROM grp g
+WHERE pw.week_end_date = %(e)s AND pw.ssoc_major_group IS NOT DISTINCT FROM g.ssoc_major_group
 """
 
 
@@ -172,15 +205,17 @@ def _build_posting_week(cur, p) -> dict:
                                      AND apps_per_day_since_posting >= %(many)s) IS TRUE
         WHERE week_end_date = %(e)s
     """, {**p, "many": many})
+    cur.execute(BARRIER_POSTING_SQL, p)
     cur.execute("""
         SELECT count(*) FILTER (WHERE NOT seen_on_snapshot), count(*) FILTER (WHERE is_shortage),
-               count(*) FILTER (WHERE is_reposted_many_apps), count(*) FILTER (WHERE is_entry_2plus),
-               count(*) FILTER (WHERE is_junior_2plus)
+               count(*) FILTER (WHERE is_reposted_many_apps), count(*) FILTER (WHERE is_barrier_posting),
+               count(*) FILTER (WHERE is_entry_2plus), count(*) FILTER (WHERE is_junior_2plus)
         FROM metrics.posting_week WHERE week_end_date = %(e)s
     """, p)
-    carried, shortage, reposted_many, entry, junior = cur.fetchone()
+    carried, shortage, reposted_many, barrier, entry, junior = cur.fetchone()
     return {"carried_forward": carried, "flag_shortage": shortage, "flag_reposted_many_apps": reposted_many,
-            "flag_entry_2plus": entry, "flag_junior_2plus": junior, "many_apps_threshold": many}
+            "flag_barrier_posting": barrier, "flag_entry_2plus": entry, "flag_junior_2plus": junior,
+            "many_apps_threshold": many}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -188,33 +223,45 @@ def _build_posting_week(cur, p) -> dict:
 # ---------------------------------------------------------------------------------------------
 BARRIER_SQL = f"""
 INSERT INTO metrics.barrier_skill (week_end_date, snapshot_date, skill_ref, skill_name, is_mapped, is_casl,
-    postings, companies, views, applications, views_per_posting, apply_rate, overall_apply_rate,
-    rate_vs_overall, views_vs_overall, is_barrier)
+    postings, companies, barrier_postings, barrier_companies, barrier_share, expected_share, lift,
+    views, applications, apply_rate, overall_apply_rate, rate_vs_overall, is_barrier)
 WITH {_POOL_SKILL}, {_SKILL_NAMES},
+group_share AS (
+    -- share of barrier postings in each SSOC major group: what a posting of that group shows on average
+    SELECT ssoc_major_group, avg(CASE WHEN is_barrier_posting THEN 1.0 ELSE 0.0 END) AS share
+    FROM metrics.posting_week WHERE week_end_date = %(e)s
+    GROUP BY ssoc_major_group
+),
 overall AS (
-    SELECT sum(views_total)::numeric / NULLIF(count(*), 0)               AS views_per_posting,
-           sum(applications_total)::numeric / NULLIF(sum(views_total), 0) AS apply_rate
+    SELECT sum(applications_total)::numeric / NULLIF(sum(views_total), 0) AS apply_rate
     FROM metrics.posting_week WHERE week_end_date = %(e)s
 ),
 per_skill AS (
     SELECT ps.skill_ref, count(*) AS postings, count(DISTINCT pw.company_name) AS companies,
+           count(*) FILTER (WHERE pw.is_barrier_posting)                        AS barrier_postings,
+           count(DISTINCT pw.company_name) FILTER (WHERE pw.is_barrier_posting) AS barrier_companies,
+           -- expected share if each of the skill's postings behaved like the average posting of its group
+           avg(gs.share)                                                        AS expected_share,
            sum(pw.views_total) AS views, sum(pw.applications_total) AS applications
     FROM pool_skill ps
     JOIN metrics.posting_week pw ON pw.week_end_date = %(e)s AND pw.job_uuid = ps.job_uuid
+    JOIN group_share gs ON gs.ssoc_major_group IS NOT DISTINCT FROM pw.ssoc_major_group
     GROUP BY ps.skill_ref
     HAVING count(*) >= %(skill_min_postings)s AND count(DISTINCT pw.company_name) >= %(min_companies)s
 ),
 rated AS (
-    SELECT p.*, p.views::numeric / p.postings AS vpp, p.applications::numeric / NULLIF(p.views, 0) AS rate
+    SELECT p.*, p.barrier_postings::numeric / p.postings AS share,
+           p.barrier_postings::numeric / p.postings / NULLIF(p.expected_share, 0) AS lift,
+           p.applications::numeric / NULLIF(p.views, 0) AS rate
     FROM per_skill p
 )
 SELECT %(e)s, %(s)s, r.skill_ref, n.skill_name, n.is_mapped, n.is_casl,
-       r.postings, r.companies, r.views, r.applications,
-       round(r.vpp, 1), round(r.rate, 5), round(o.apply_rate, 5),
+       r.postings, r.companies, r.barrier_postings, r.barrier_companies,
+       round(r.share, 4), round(r.expected_share, 4), round(r.lift, 3),
+       r.views, r.applications, round(r.rate, 5), round(o.apply_rate, 5),
        round(r.rate / NULLIF(o.apply_rate, 0), 3),
-       round(r.vpp / NULLIF(o.views_per_posting, 0), 3),
-       COALESCE(r.vpp >= o.views_per_posting
-                AND r.rate / NULLIF(o.apply_rate, 0) <= %(barrier_max_rate_ratio)s, FALSE)
+       COALESCE(r.lift >= %(barrier_min_lift)s AND r.barrier_postings >= %(barrier_min_flagged)s
+                AND r.barrier_companies >= %(min_companies)s, FALSE)
 FROM rated r
 CROSS JOIN overall o
 JOIN skill_names n ON n.skill_ref = r.skill_ref
@@ -534,7 +581,9 @@ METRIC_CHECKS = [
                   + (SELECT count(*) FROM metrics.unrealistic_requirements WHERE week_end_date = %(e)s
                        AND (flagged_share NOT BETWEEN 0 AND 1 OR flagged_postings > base_postings))
                   + (SELECT count(*) FROM metrics.skill_demand WHERE week_end_date = %(e)s
-                       AND share_of_week NOT BETWEEN 0 AND 1)""",
+                       AND share_of_week NOT BETWEEN 0 AND 1)
+                  + (SELECT count(*) FROM metrics.barrier_skill WHERE week_end_date = %(e)s
+                       AND (barrier_share NOT BETWEEN 0 AND 1 OR lift < 0 OR barrier_postings > postings))""",
           "==", 0, "every share is between 0 and 1 and no group has more flagged than base postings"),
     Check("negative_rates", "range", "fail",
           """SELECT (SELECT count(*) FROM metrics.competitiveness WHERE week_end_date = %(e)s
