@@ -1,6 +1,6 @@
 """Near-real-time MyCareersFuture feed, every 30 minutes.
 
-fetch_newest -> load_poll -> check_poll
+daily_ingest_not_running -> fetch_newest -> load_poll -> check_poll
 
 Each run reads the first few pages (MCF_LIVE_PAGES, default 3, so 300 postings) of the same public
 newest-first list the daily crawl walks, writes slim rows to data/raw/mcf_live/<date>/<time>.jsonl.gz and
@@ -12,6 +12,9 @@ Design (L7, and the "justify it, do not over-build it" point from the streaming 
     move over hours, so a 30-minute poll loses nothing the analysis needs. Why not Kafka: docs/live-feed.md.
   - polite: 3 calls a poll (144 a day, about 15% of one daily crawl), 2 s between pages, the same retry and
     backoff session as the daily crawl. Only open postings, only the list, no job-ID lookups.
+  - out of the daily crawl's way: daily_ingest_not_running skips the poll (and the tasks after it) while
+    daily_mcf_ingest is queued or running, and always at 10:00 SGT. The crawl is often rate-limited and can
+    run for hours with retries, so extra calls then would risk a restarted crawl (ingestion.mcf_live.ingest_clash).
   - idempotent: the key is (poll_ts, job_uuid) and rows are never updated, so a retried load_poll inserts
     nothing new. poll_ts is fixed in fetch_newest and passed on, so retries reuse it.
   - small atomic tasks: a failed load or check retries without calling the API again (the gz file is the
@@ -30,10 +33,12 @@ from pathlib import Path
 import pendulum
 from airflow.decorators import dag, task
 from airflow.exceptions import AirflowFailException
+from airflow.models import DagRun
 from airflow.providers.postgres.hooks.postgres import PostgresHook
+from airflow.utils.state import DagRunState
 
-from ingestion.mcf_live import DEFAULT_PAGES, DEFAULT_PAUSE, load_poll, poll_file_path, poll_newest, \
-    read_poll_file, write_poll_file
+from ingestion.mcf_live import DAILY_INGEST_DAG, DEFAULT_PAGES, DEFAULT_PAUSE, ingest_clash, load_poll, \
+    poll_file_path, poll_newest, read_poll_file, write_poll_file
 from quality.live_poll_checks import failed_checks, run_live_checks, summarise
 
 SGT = "Asia/Singapore"
@@ -56,6 +61,15 @@ def _warehouse_conn():
     doc_md=__doc__,
 )
 def mcf_live_poll():
+
+    @task.short_circuit
+    def daily_ingest_not_running(data_interval_end=None) -> bool:
+        # False skips every task after this one, so the poll makes no API call; the run still ends green.
+        active = sum(len(DagRun.find(dag_id=DAILY_INGEST_DAG, state=s))
+                     for s in (DagRunState.QUEUED, DagRunState.RUNNING))
+        reason = ingest_clash(data_interval_end, active)
+        print(reason or f"{DAILY_INGEST_DAG} is not running, polling")
+        return reason is None
 
     @task(execution_timeout=timedelta(minutes=15))
     def fetch_newest() -> dict:
@@ -90,7 +104,9 @@ def mcf_live_poll():
             raise AirflowFailException(f"Live poll {stats['poll_ts']} failed checks: {summary['failed']}")
         return summary
 
-    check_poll(load_poll_task(fetch_newest()))
+    stats = fetch_newest()
+    daily_ingest_not_running() >> stats
+    check_poll(load_poll_task(stats))
 
 
 mcf_live_poll()

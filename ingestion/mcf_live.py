@@ -13,7 +13,7 @@ import gzip
 import hashlib
 import json
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from psycopg2.extras import execute_values
@@ -23,6 +23,10 @@ from ingestion.mcf_client import PAGE_SIZE, iter_jobs, make_session
 DEFAULT_PAGES = 3        # 3 x 100 newest postings: about 1.5 to 2 hours of new postings at midday
 DEFAULT_PAUSE = 2.0      # seconds between pages (the daily crawl uses 1 s)
 TITLE_MAX = 200
+
+SGT = timezone(timedelta(hours=8))   # Singapore has no daylight saving
+DAILY_INGEST_DAG = "daily_mcf_ingest"
+DAILY_INGEST_START = (10, 0)         # its schedule, "0 10 * * *" SGT
 
 # Column order of raw.mcf_live_poll after poll_ts (sql/init/06_live_poll.sql).
 COLUMNS = ("job_uuid", "list_rank", "created_at", "updated_at", "new_posting_date", "original_posting_date",
@@ -86,6 +90,23 @@ def slim_posting(job: dict, rank: int) -> dict:
         "category": _text(first_category),
         "title": _text(job.get("title"), TITLE_MAX),
     }
+
+
+def ingest_clash(poll_time: datetime, active_ingest_runs: int):
+    """Why this poll should leave the API alone, or None to go ahead.
+
+    The daily crawl walks about 900 pages from the same machine and is rate-limited (429) part-way through
+    most days; with retries it has run from 10:00 to past 15:00 (27 and 28 Oct 2026). A poll during it adds
+    calls to an API that is already throttling us, and if one crawl page runs out of retries the whole crawl
+    starts again. So a poll is skipped while a daily ingest run is queued or running, and the 10:00 slot is
+    always skipped, because at that moment the ingest run may not have been created yet.
+    """
+    if active_ingest_runs:
+        return f"{DAILY_INGEST_DAG} has {active_ingest_runs} active run(s), so this poll is skipped"
+    local = poll_time.astimezone(SGT)
+    if (local.hour, local.minute) == DAILY_INGEST_START:
+        return f"{local:%H:%M} SGT is when {DAILY_INGEST_DAG} starts, so this poll is skipped"
+    return None
 
 
 def _totals(row: dict) -> tuple:

@@ -13,10 +13,10 @@ early curve of views and applications by hours since posting. The daily crawl ca
 once a day, at whatever age it happens to be at 10:00.
 
 ```
-fetch_newest  ->  load_poll  ->  check_poll
-(3 API calls,     (append to      (9 checks -> raw.mcf_live_poll_dq,
- slim gz file)     raw.mcf_live_poll, fails the run on a 'fail' check)
-                   raw.mcf_live_poll_runs)
+daily_ingest_not_running  ->  fetch_newest  ->  load_poll  ->  check_poll
+(skips the rest while          (3 API calls,     (append to      (9 checks -> raw.mcf_live_poll_dq,
+ daily_mcf_ingest is queued     slim gz file)     raw.mcf_live_poll, fails the run on a 'fail' check)
+ or running, and at 10:00)                        raw.mcf_live_poll_runs)
 ```
 
 | Object | What it holds |
@@ -43,8 +43,15 @@ daily crawl.
 | Postgres a day | about **5.2 MB** (14,400 rows with both indexes, measured on a simulated day built from real rows) | about 490 MB JSONB |
 | Files a day | about **0.8 MB** (`data/raw/mcf_live/<date>/<time>.jsonl.gz`, 17 KB a poll) | about 150 MB gz |
 
-Running to the 15 Nov deadline (12 days) is about 60 MB in Postgres and 10 MB of files. The 10:00 poll overlaps
-the start of the daily crawl and adds 3 calls to its roughly 900, so it does not change the crawl's load on the API.
+Running to the 15 Nov deadline (12 days) is about 60 MB in Postgres and 10 MB of files.
+
+**No polls during the daily crawl.** The crawl is not a short 10:00 job: from 24 Oct to 3 Nov it took 21 to 80
+minutes, logged 5 to 14 rate-limit retries on every day checked, and on 27 and 28 Oct it only finished at 14:49 and
+15:31 after task retries. A poll in that time adds calls (and its own backoff) to an API that is already throttling
+us, and one crawl page out of retries restarts the whole crawl. So `daily_ingest_not_running` skips the poll while
+`daily_mcf_ingest` is queued or running, and always at 10:00 (the ingest run may not exist yet at that instant).
+Skipped runs end green with the poll tasks marked skipped. The next poll's `minutes_since_prev_poll` check warns
+about the gap, which is correct: those half-hours were not polled.
 
 **Terms.** The same use as the daily crawl and the 3 Nov plan (`Admin/PROF-WANTS-AND-GAPS.md`, D2): only the public
 list of open postings in its default order, a pause between pages, no job-ID lookups, no closed postings, raw data
@@ -124,7 +131,7 @@ Every 30 minutes not polled is lost (the counters move on), so turn it on as soo
 ## 6. What to show in the report and video
 
 Report:
-1. Airflow Graph View of `mcf_live_poll` (3 tasks) and the Grid View with a day of green runs every 30 minutes.
+1. Airflow Graph View of `mcf_live_poll` (4 tasks) and the Grid View with a day of green runs every 30 minutes.
 2. `metrics.live_first24h_summary` for `group_type = 'all'` and the main categories: the analysis table.
 3. A chart from `metrics.live_first24h_curve` (median applications and % with an application, hours 0 to 23).
 4. `metrics.live_poll_status` for a few polls (freshness in minutes, new postings per poll, pages unchanged), and
@@ -133,7 +140,7 @@ Report:
 5. Section 4's paragraph on Kafka, with the numbers from section 2.
 
 Video (about 1 minute):
-1. Grid View: press Trigger (or wait for :00 or :30) and watch the 3 tasks turn green in about 10 seconds.
+1. Grid View: press Trigger (or wait for :00 or :30) and watch the 4 tasks turn green in about 10 seconds.
 2. Run `SELECT * FROM metrics.live_poll_status ORDER BY poll_time_sgt DESC LIMIT 3;` before and after: a new row,
    new postings since the last poll, minutes since the newest posting.
 3. One posting's curve: `SELECT source, hours_since_posting, views, applications FROM metrics.live_curve_points

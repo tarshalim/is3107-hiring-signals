@@ -1,5 +1,5 @@
 """Offline tests for the near-real-time poller (ingestion/mcf_live.py): no network, no database."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ingestion import mcf_client, mcf_live
 
@@ -120,6 +120,23 @@ def test_a_posting_on_two_pages_keeps_its_fresher_copy(monkeypatch):
     kept = {r["job_uuid"]: (r["list_rank"], r["views"], r["applications"]) for r in rows}
     assert kept == {"a": (0, 0, 0), "b": (2, 4, 1), "c": (3, 2, 0)}
     assert stats["duplicates_dropped"] == 2 and stats["rows_fetched"] == 3
+
+
+def test_poll_is_skipped_while_the_daily_ingest_runs():
+    """27 Oct 2026: the crawl retried until 14:49 SGT. Every poll in that time must leave the API alone."""
+    afternoon = datetime(2026, 10, 27, 6, 30, tzinfo=timezone.utc)                # 14:30 SGT
+    assert "daily_mcf_ingest has 1 active run" in mcf_live.ingest_clash(afternoon, 1)
+    assert mcf_live.ingest_clash(afternoon, 0) is None                             # crawl finished: poll again
+
+
+def test_poll_is_always_skipped_at_ten_sgt():
+    """At 10:00 the ingest run may not exist yet, so the slot is skipped even with no active run."""
+    ten_sgt = datetime(2026, 11, 4, 2, 0, tzinfo=timezone.utc)
+    assert "10:00 SGT" in mcf_live.ingest_clash(ten_sgt, 0)
+    for minutes in (-30, 30):                                                      # 09:30 and 10:30 still poll
+        assert mcf_live.ingest_clash(ten_sgt + timedelta(minutes=minutes), 0) is None
+    ten_utc = datetime(2026, 11, 4, 10, 0, tzinfo=timezone.utc)                    # 18:00 SGT, not the crawl
+    assert mcf_live.ingest_clash(ten_utc, 0) is None
 
 
 def test_poll_stops_when_the_api_runs_out(monkeypatch):
