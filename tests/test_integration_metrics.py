@@ -144,7 +144,9 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
     assert [r[0] for r in pool] == list("abcdeg")                       # f closed after D1
     flags = {r[0]: r[2:] for r in pool}
     assert flags["c"] == (True, False, False, False)                    # shortage
-    assert flags["d"] == (False, True, False, False)                    # reposted with the P90 of applications (320)
+    # applications per day on D3: a 8/2, b 2/2, c 1/2, d 320/2, e 2/2, g 7/1 (posted that day: at least 1 day)
+    # -> P90 (percentile_disc) of 0.5, 1, 1, 4, 7, 160 is 160, and d is the only reposted posting at or above it
+    assert flags["d"] == (False, True, False, False)                    # reposted with the P90 of applications per day
     assert flags["b"] == (False, False, True, False)                    # entry level asking 3 years
     assert flags["e"] == (False, False, False, False)                   # junior asking 1 year: neither flag
     assert sum(sum(v) for v in flags.values()) == 3
@@ -169,7 +171,8 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
         == [(1, Decimal("6.000"), Decimal("2.0"), Decimal("1.0"))]           # medians of c, the shortage posting
     unreal = {r[0]: r[1:] for r in _all(conn, """SELECT flag, base_postings, flagged_postings, flagged_share, rule
                  FROM metrics.unrealistic_requirements WHERE week_end_date = %s AND group_type = 'overall'""", D3)}
-    assert unreal["reposted_many_apps"][:3] == (6, 1, Decimal("0.1667")) and "320 or more" in unreal["reposted_many_apps"][3]
+    assert unreal["reposted_many_apps"][:3] == (6, 1, Decimal("0.1667"))
+    assert "160 or more applications per day" in unreal["reposted_many_apps"][3]
     assert unreal["entry_level_2plus_years"][:3] == (1, 1, Decimal("1.0000"))
     assert unreal["junior_2plus_years"][:3] == (1, 0, Decimal("0.0000"))      # e: Junior Executive asking 1 year
 

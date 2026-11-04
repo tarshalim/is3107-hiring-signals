@@ -63,7 +63,7 @@ THRESHOLDS = {
     # "reposted" here is once or more, against twice for shortage: a posting reposted even once although it was
     # already drawing many applications is the odd case; shortage needs the stronger "again and again"
     "unrealistic_min_reposts": 1,
-    "many_apps_percentile": 0.9,     # "many applications" = the P90 of open postings that week
+    "many_apps_percentile": 0.9,     # "many applications" = the P90 of applications per day since posting that week
     "entry_levels": ["Fresh/entry level"],
     "junior_levels": ["Junior Executive"],   # reported as its own flag: 46% ask 2+ years against 6.6% at entry level
     "entry_min_years": 2,
@@ -142,7 +142,7 @@ SELECT %(e)s, %(s)s, o.job_uuid, o.job_key, o.snapshot_date, o.snapshot_date = %
        CASE WHEN o.days_since_original_posting IS NOT NULL
             THEN round(o.applications_total::numeric / GREATEST(o.days_since_original_posting, 1), 4) END,
        (o.repost_count >= %(shortage_min_reposts)s AND o.applications_total <= %(shortage_max_applications)s),
-       FALSE,      -- set below, once the week's P90 of applications is known
+       FALSE,      -- set below, once the week's P90 of applications per day is known
        -- two separate flags: entry level and junior asking 2+ years (their shares differ several times over)
        (j.position_level = ANY(%(entry_levels)s)
         AND NOT j.exp_out_of_range AND j.min_years_exp BETWEEN %(entry_min_years)s AND %(exp_max_valid)s) IS TRUE,
@@ -153,12 +153,14 @@ JOIN clean.dim_job j ON j.job_key = o.job_key
 """
 
 
-def many_apps_threshold(cur, p) -> int:
-    """'Many applications' for the week: the P90 of applications_total over the open postings, at least 1."""
-    cur.execute("""SELECT percentile_disc(%(many_apps_percentile)s) WITHIN GROUP (ORDER BY applications_total)
+def many_apps_threshold(cur, p) -> float:
+    """'Many applications' for the week: the P90 of applications PER DAY since first posted over the open postings.
+    Per day, not in total: reposted postings are older (median 50 to 94 days against 13), so a total P90 mostly
+    picked old postings (review 4 Nov, #5)."""
+    cur.execute("""SELECT percentile_disc(%(many_apps_percentile)s) WITHIN GROUP (ORDER BY apps_per_day_since_posting)
                    FROM metrics.posting_week WHERE week_end_date = %(e)s""", p)
     value = cur.fetchone()[0]
-    return max(int(value or 0), 1)
+    return round(float(value or 0), 4)
 
 
 def _build_posting_week(cur, p) -> dict:
@@ -166,7 +168,8 @@ def _build_posting_week(cur, p) -> dict:
     many = many_apps_threshold(cur, p)
     cur.execute("""
         UPDATE metrics.posting_week
-        SET is_reposted_many_apps = (repost_count >= %(unrealistic_min_reposts)s AND applications_total >= %(many)s)
+        SET is_reposted_many_apps = (repost_count >= %(unrealistic_min_reposts)s AND applications_total > 0
+                                     AND apps_per_day_since_posting >= %(many)s) IS TRUE
         WHERE week_end_date = %(e)s
     """, {**p, "many": many})
     cur.execute("""
@@ -315,9 +318,10 @@ def _build_unrealistic(cur, p) -> dict:
                 f"with a usable experience value")
 
     rules = {
-        "rule_reposted": (f"reposted (repost_count {p['unrealistic_min_reposts']} or more) with applications_total "
-                          f"{many} or more, the P{pct} "
-                          f"of open postings this week. Base: all open postings"),
+        "rule_reposted": (f"reposted (repost_count {p['unrealistic_min_reposts']} or more) with {many:g} or more "
+                          f"applications per day since first posted (applications_total / days since "
+                          f"original_posting_date, at least 1 day), the P{pct} of open postings this week. "
+                          f"Base: all open postings"),
         "rule_entry": experience_rule(p["entry_levels"]),
         "rule_junior": experience_rule(p["junior_levels"]),
     }

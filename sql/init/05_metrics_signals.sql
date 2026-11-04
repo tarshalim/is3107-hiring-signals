@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS metrics.posting_week (
     days_since_original_posting SMALLINT,
     apps_per_day_since_posting  NUMERIC(12,4),      -- applications_total / max(days since original posting, 1)
     is_shortage            BOOLEAN  NOT NULL,       -- reposted repeatedly and still few applications
-    is_reposted_many_apps  BOOLEAN  NOT NULL,       -- reposted although it already had many applications
+    is_reposted_many_apps  BOOLEAN  NOT NULL,       -- reposted although it draws many applications per day (week's P90)
     is_entry_2plus         BOOLEAN  NOT NULL,       -- "Fresh/entry level" position asking 2+ years
     is_junior_2plus        BOOLEAN  NOT NULL,       -- "Junior Executive" position asking 2+ years (kept apart: a far higher share)
     PRIMARY KEY (week_end_date, job_uuid)
@@ -144,7 +144,8 @@ CREATE TABLE IF NOT EXISTS metrics.shortage_skill (
 );
 
 -- Signal 3, unrealistic requirements, three flags reported apart because they mean different things:
---   'reposted_many_apps'      : reposted although it already had many applications (P90 or more)
+--   'reposted_many_apps'      : reposted although it draws many applications per day since first posted
+--                               (the week's P90 or more; per day so older postings are not favoured)
 --   'entry_level_2plus_years' : "Fresh/entry level" position asking for 2+ years of experience
 --   'junior_2plus_years'      : "Junior Executive" position asking for 2+ years (a much higher share, so kept apart)
 -- Long format: one row per flag and group (overall, category, SSOC major group, position level).
