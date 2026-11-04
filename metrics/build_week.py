@@ -43,7 +43,8 @@ THRESHOLDS = {
     # minimum sample sizes, so one employer's bulk postings cannot create a signal out of nothing
     "skill_min_postings": 100,       # open postings carrying the skill (barrier, shortage, competitiveness)
     "group_min_postings": 30,        # postings in a category, SSOC occupation or position level
-    "salary_min_postings": 30,       # open postings with the skill and a usable salary range
+    "salary_min_postings": 100,      # open postings with the skill and a usable salary range (30 until 4 Nov:
+                                     # the top medians then came from 32 to 34 postings, e.g. "Protection", "IPO")
     "demand_min_postings": 30,       # postings with the skill across the whole demand window
     "demand_weeks": 6,               # posting weeks kept in skill_demand, counting back from the snapshot's week
     "min_companies": 10,             # employers behind a barrier skill, or behind a skill's shortage postings

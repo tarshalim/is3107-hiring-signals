@@ -105,6 +105,7 @@ def test_thresholds_are_sane():
     assert "Fresh/entry level" in t["entry_levels"] and "Junior Executive" in t["junior_levels"]
     assert not set(t["entry_levels"]) & set(t["junior_levels"])           # one posting, one flag
     assert (t["salary_floor"], t["salary_ceiling"]) == (300, 100000)      # monthly; hourly rates and annual pay left out
+    assert t["salary_min_postings"] == 100                                # skill_salary: a median from 100+ postings
     assert t["min_companies"] == 10                                       # barrier and shortage skills (review #14)
     for k in ("skill_min_postings", "group_min_postings", "salary_min_postings", "demand_min_postings",
               "shortage_min_flagged", "demand_weeks", "max_gap_snapshots", "min_companies"):

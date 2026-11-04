@@ -85,7 +85,7 @@ Stored with every run in `metrics.run_log.thresholds`. Change them in `metrics/b
 |---|---|---|
 | Postings carrying a skill (barrier, shortage, competitiveness by skill) | 100 | one employer's bulk postings cannot make a skill |
 | Postings in a category, occupation or position level | 30 | a stable median |
-| Postings with a salary, per skill | 30 | a stable median |
+| Postings with a usable salary, per skill (`skill_salary`) | 100 | a stable median: with 30 the top medians on 3 Nov came from 32 to 34 postings |
 | Postings per skill across the demand window | 30 | keeps the table to skills with a real series |
 | Shortage postings carrying a skill | 25 | from the metrics design |
 | Employers behind a barrier skill, or behind a skill's shortage postings | 10 | before this rule the top four shortage skills on 25 Oct each came from a single employer; with 5, Metal Fabrication (57 shortage postings) and Product Management (85) on 3 Nov each came from 5 firms |
