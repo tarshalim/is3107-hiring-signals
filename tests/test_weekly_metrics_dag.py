@@ -22,9 +22,14 @@ def _dag_kwargs(tree):
     raise AssertionError("no @dag(...) decorator found")
 
 
+def _decorator_name(dec):
+    return ast.unparse(dec.func if isinstance(dec, ast.Call) else dec)
+
+
 def _task_functions(tree):
+    """@task, @task(...) and @task.sensor(...) functions, in file order."""
     return {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
-            and any(ast.unparse(d) == "task" for d in n.decorator_list)}
+            and any(_decorator_name(d) in ("task", "task.sensor") for d in n.decorator_list)}
 
 
 def test_has_refresh_mom_stats_then_comparison():
@@ -36,7 +41,8 @@ def test_has_refresh_mom_stats_then_comparison():
 
 def test_has_the_signal_tasks():
     tasks = list(_task_functions(_tree()))
-    assert tasks[2:] == ["pick_snapshot", "build_posting_week", "build_signal", "check_and_log"]
+    assert tasks[2:] == ["wait_for_week_end_snapshot", "pick_snapshot", "build_posting_week", "build_signal",
+                         "check_and_log"]
     src = DAG_FILE.read_text(encoding="utf-8")
     assert "week = pick_snapshot()" in src
     assert "for table in SIGNAL_TABLES" in src and 'override(task_id=f"build_{table}")' in src
@@ -81,6 +87,24 @@ def test_signals_take_the_week_from_the_run_like_the_comparison():
     assert "get_current_context" not in src            # no run-config override of the week
     for name in ("build_posting_week", "build_signal", "check_and_log"):
         assert "data_interval" not in ast.unparse(tasks[name]), name   # they use pick_snapshot's week
+
+
+def test_signals_wait_for_a_late_tuesday_then_fall_back_instead_of_failing():
+    """Review 4 Nov #2: on 27 and 28 Oct ingest ended at 14:49 and 15:31, after the 14:00 run."""
+    tasks = _task_functions(_tree())
+    sensor = tasks["wait_for_week_end_snapshot"]
+    dec = {kw.arg: kw.value for kw in sensor.decorator_list[0].keywords}
+    assert ast.literal_eval(dec["mode"]) == "reschedule"
+    assert ast.literal_eval(dec["soft_fail"]) is True              # timeout -> skipped, not failed
+    assert "snapshot_week.week_end_ready(cur, up_to)" in ast.unparse(sensor)
+    src = DAG_FILE.read_text(encoding="utf-8")
+    timeout = next(n.value for n in _tree().body if isinstance(n, ast.Assign)
+                   and getattr(n.targets[0], "id", None) == "WEEK_END_TIMEOUT")
+    hours = eval(compile(ast.Expression(timeout), "<const>", "eval"), {"int": int}) / 3600
+    assert 20 <= 14 + hours <= 21                                   # after the transform gives up at 20:00
+    pick_dec = {kw.arg: kw.value for kw in tasks["pick_snapshot"].decorator_list[0].keywords}
+    assert ast.literal_eval(pick_dec["trigger_rule"]) == "none_failed"
+    assert "wait_for_week_end_snapshot() >> week" in src
 
 
 def test_every_signal_table_has_a_builder_and_the_dag_builds_them_all():

@@ -33,3 +33,14 @@ def latest_snapshot_in_week(cur, after, up_to):
         raise NoSnapshotInWeek(f"No MCF snapshot in clean.fact_job_day for the week {after + timedelta(days=1)} "
                                f"to {up_to}: the daily ingest/transform did not load any day of that week.")
     return snapshot_date
+
+
+def week_end_ready(cur, up_to) -> bool:
+    """True once the week-end day (up_to, the Tuesday) is fully loaded: the transform writes its 'dag_run' row
+    in clean.load_log last, after the data-quality checks. Also True when a LATER day is already loaded: the
+    Tuesday was missed and will never come, so a cleared old week does not wait for it."""
+    cur.execute("""
+        SELECT EXISTS (SELECT 1 FROM clean.load_log WHERE step = 'dag_run' AND snapshot_date = %s)
+            OR EXISTS (SELECT 1 FROM clean.fact_job_day WHERE snapshot_date > %s)
+    """, (up_to, up_to))
+    return bool(cur.fetchone()[0])

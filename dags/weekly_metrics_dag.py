@@ -2,17 +2,20 @@
 
 refresh_mom_stats -> compare_mcf_with_mom
 
-                                       +-> build_barrier_skill -------------+
-                                       +-> build_shortage_skill ------------+
-pick_snapshot -> build_posting_week ---+-> build_unrealistic_requirements --+-> check_and_log
-                                       +-> build_competitiveness -----------+
-                                       +-> build_skill_demand --------------+
-                                       +-> build_skill_salary --------------+
+                                                                   +-> build_barrier_skill -------------+
+                                                                   +-> build_shortage_skill ------------+
+wait_for_week_end_snapshot -> pick_snapshot -> build_posting_week -+-> build_unrealistic_requirements --+-> check_and_log
+                                                                   +-> build_competitiveness -----------+
+                                                                   +-> build_skill_demand --------------+
+                                                                   +-> build_skill_salary --------------+
 
-Runs every Tuesday at 14:00 Singapore time, after that day's ingest (10:00) and transform (10:30, whose
-sensor gives up by 13:30 at the latest), so it normally sees Tuesday's snapshot. If the transform is
-very late, the comparison and the signals use Monday's snapshot instead; they never read a half-loaded
-day, because the transform loads each day in one transaction.
+Runs every Tuesday at 14:00 Singapore time. Ingest (10:00) normally finishes by 10:45 and the transform
+soon after, but on 27 and 28 Oct ingest ran until 14:49 and 15:31. So wait_for_week_end_snapshot first
+waits (reschedule mode, no worker slot held) until Tuesday's day is fully loaded, for up to 6.5 hours
+(about 20:30 SGT, after the transform's own 20:00 deadline). If Tuesday never arrives, the sensor is
+skipped (soft_fail) and pick_snapshot still runs (trigger_rule none_failed) with Monday's snapshot, which
+run_log and the snapshot_is_week_end check record. Nothing ever reads a half-loaded day, because the
+transform loads each day in one transaction.
 
 The two branches are independent: the MOM comparison writes metrics.mcf_vs_mom_share
 (sql/init/03_mom_vacancies.sql), the signal tasks write the tables of sql/init/05_metrics_signals.sql
@@ -45,8 +48,8 @@ Design:
     rewrites the rows of its week's snapshot dates in one transaction; every signal table deletes and
     rewrites its week's rows (week_end_date) in one transaction. So a retry or a cleared run replaces
     its rows and never duplicates them.
-  - no sensor on the transform DAG: the 14:00 slot is after the transform's sensor timeout, and
-    backfilled weeks are long finished.
+  - a sensor on the warehouse, not on the transform DAG (same reason as daily_mcf_transform's wait_for_raw):
+    the contract is "Tuesday is in clean", whoever loaded it. Backfilled or cleared old weeks pass at once.
 """
 import json
 from datetime import timedelta
@@ -55,6 +58,7 @@ import pendulum
 from airflow.decorators import dag, task
 from airflow.exceptions import AirflowFailException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
+from airflow.sensors.base import PokeReturnValue
 
 from metrics.build_week import (SIGNAL_TABLES, build_table, finish_run_log, resolve_week, run_metric_checks,
                                 start_run_log)
@@ -62,6 +66,8 @@ from quality.clean_checks import summarise
 from transform import mom_vacancies, snapshot_week
 
 SGT = "Asia/Singapore"
+POKE_INTERVAL = 10 * 60                     # check for Tuesday's clean day every 10 minutes
+WEEK_END_TIMEOUT = int(6.5 * 60 * 60)       # 14:00 -> about 20:30 SGT, after the transform's 20:00 deadline
 
 
 def _warehouse_conn():
@@ -109,7 +115,21 @@ def weekly_metrics():
         print(json.dumps(stats, default=str))
         return stats
 
-    @task
+    @task.sensor(poke_interval=POKE_INTERVAL, timeout=WEEK_END_TIMEOUT, mode="reschedule", soft_fail=True)
+    def wait_for_week_end_snapshot(data_interval_start=None, data_interval_end=None) -> PokeReturnValue:
+        """Done when the week-end Tuesday is fully loaded in clean (or a later day is). On timeout the task
+        is skipped, not failed, so pick_snapshot falls back to the latest day of the week."""
+        _, up_to = snapshot_week.week_bounds(data_interval_start, data_interval_end)
+        conn = _warehouse_conn()
+        try:
+            with conn.cursor() as cur:
+                ready = snapshot_week.week_end_ready(cur, up_to)
+        finally:
+            conn.close()
+        print(f"week_end_date={up_to} ready={ready}")
+        return PokeReturnValue(is_done=ready)
+
+    @task(trigger_rule="none_failed")    # also runs when the sensor timed out (skipped)
     def pick_snapshot(data_interval_start=None, data_interval_end=None, run_id=None) -> dict:
         """This run's week and its latest snapshot (the same rule as compare_mcf_with_mom), written to
         metrics.run_log before any signal table is built. Airflow fills in the data interval and run_id."""
@@ -163,6 +183,7 @@ def weekly_metrics():
     compare_mcf_with_mom(refresh_mom_stats())
 
     week = pick_snapshot()
+    wait_for_week_end_snapshot() >> week
     posting = build_posting_week(week)
     signals = []
     for table in SIGNAL_TABLES:

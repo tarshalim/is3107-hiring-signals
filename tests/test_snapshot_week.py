@@ -71,6 +71,32 @@ def test_week_without_snapshot_fails_and_names_the_week():
         _pick(datetime(2026, 10, 20, 6, tzinfo=UTC))         # before our first snapshot (24 Oct)
 
 
+class ReadyCursor:
+    """Answers week_end_ready from the days with a 'dag_run' row and the days in fact_job_day."""
+
+    def __init__(self, logged, loaded):
+        self.logged, self.loaded = logged, loaded
+
+    def execute(self, sql, params=None):
+        day, _ = params
+        self._result = (day in self.logged or any(d > day for d in self.loaded),)
+
+    def fetchone(self):
+        return self._result
+
+
+def test_week_end_ready_waits_for_the_tuesday_run_to_finish():
+    tue = date(2026, 11, 3)
+    assert not sw.week_end_ready(ReadyCursor(logged=LOADED, loaded=LOADED), tue)    # Tuesday not loaded yet
+    assert sw.week_end_ready(ReadyCursor(logged=[*LOADED, tue], loaded=[*LOADED, tue]), tue)
+
+
+def test_week_end_ready_does_not_wait_for_a_tuesday_that_was_missed():
+    # Tuesday 27 Oct never loaded, but 28 Oct is: waiting would never help
+    logged = [d for d in LOADED if d != date(2026, 10, 27)]
+    assert sw.week_end_ready(ReadyCursor(logged=logged, loaded=logged), date(2026, 10, 27))
+
+
 def test_build_comparison_writes_nothing_for_a_missing_week():
     class FakeConn:
         def __init__(self):
