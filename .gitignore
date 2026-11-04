@@ -17,6 +17,11 @@ data/*
 data/ext/
 mycareersfuture.json
 
+# private notes and local assistant files (never committed)
+docs/private/
+CLAUDE.md
+.claude/
+
 # Airflow local files
 logs/
 plugins/
@@ -28,3 +33,4 @@ standalone_admin_password.txt
 .vscode/
 .idea/
 .DS_Store
+desktop.ini
