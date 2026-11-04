@@ -92,7 +92,8 @@ CREATE TABLE IF NOT EXISTS metrics.posting_week (
     apps_per_day_since_posting  NUMERIC(12,4),      -- applications_total / max(days since original posting, 1)
     is_shortage            BOOLEAN  NOT NULL,       -- reposted repeatedly and still few applications
     is_reposted_many_apps  BOOLEAN  NOT NULL,       -- reposted although it already had many applications
-    is_entry_level_2plus   BOOLEAN  NOT NULL,       -- entry-level or junior position asking 2+ years
+    is_entry_2plus         BOOLEAN  NOT NULL,       -- "Fresh/entry level" position asking 2+ years
+    is_junior_2plus        BOOLEAN  NOT NULL,       -- "Junior Executive" position asking 2+ years (kept apart: a far higher share)
     PRIMARY KEY (week_end_date, job_uuid)
 );
 
@@ -227,3 +228,16 @@ CREATE TABLE IF NOT EXISTS metrics.skill_salary (
 
 -- The MOM validation is metrics.mcf_vs_mom_share (sql/init/03_mom_vacancies.sql), built by the
 -- compare_mcf_with_mom task of the same DAG run from the same snapshot.
+
+-- ---------------------------------------------------------------------------------------------
+-- Upgrade of a warehouse created before 4 Nov 2026 (review fixes #6 and #9). CREATE TABLE IF NOT
+-- EXISTS above leaves an existing table as it is, so the new columns are added here. Every statement
+-- is idempotent, and on a new warehouse they change nothing. Rows of old weeks get FALSE / NULL in the
+-- new columns until those weeks are rerun (clear their weekly_metrics runs).
+-- ---------------------------------------------------------------------------------------------
+-- #9: one flag per position level instead of is_entry_level_2plus (entry level and junior mixed)
+ALTER TABLE metrics.posting_week ADD COLUMN IF NOT EXISTS is_entry_2plus  BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE metrics.posting_week ADD COLUMN IF NOT EXISTS is_junior_2plus BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE metrics.posting_week ALTER COLUMN is_entry_2plus  DROP DEFAULT;
+ALTER TABLE metrics.posting_week ALTER COLUMN is_junior_2plus DROP DEFAULT;
+ALTER TABLE metrics.posting_week DROP COLUMN IF EXISTS is_entry_level_2plus;

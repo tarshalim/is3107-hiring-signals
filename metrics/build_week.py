@@ -115,7 +115,7 @@ INSERT INTO metrics.posting_week (
     min_years_exp, exp_out_of_range, salary_min, salary_max, salary_mid, salary_usable, vacancies,
     original_posting_date, new_posting_date, expiry_date,
     views_total, applications_total, repost_count, days_since_original_posting, apps_per_day_since_posting,
-    is_shortage, is_reposted_many_apps, is_entry_level_2plus)
+    is_shortage, is_reposted_many_apps, is_entry_2plus, is_junior_2plus)
 WITH latest AS (
     -- each posting's latest sighting on or before the snapshot, inside the gap window
     SELECT DISTINCT ON (f.job_uuid)
@@ -143,7 +143,10 @@ SELECT %(e)s, %(s)s, o.job_uuid, o.job_key, o.snapshot_date, o.snapshot_date = %
             THEN round(o.applications_total::numeric / GREATEST(o.days_since_original_posting, 1), 4) END,
        (o.repost_count >= %(shortage_min_reposts)s AND o.applications_total <= %(shortage_max_applications)s),
        FALSE,      -- set below, once the week's P90 of applications is known
-       ((j.position_level = ANY(%(entry_levels)s) OR j.position_level = ANY(%(junior_levels)s))
+       -- two separate flags: entry level and junior asking 2+ years (their shares differ several times over)
+       (j.position_level = ANY(%(entry_levels)s)
+        AND NOT j.exp_out_of_range AND j.min_years_exp BETWEEN %(entry_min_years)s AND %(exp_max_valid)s) IS TRUE,
+       (j.position_level = ANY(%(junior_levels)s)
         AND NOT j.exp_out_of_range AND j.min_years_exp BETWEEN %(entry_min_years)s AND %(exp_max_valid)s) IS TRUE
 FROM open_postings o
 JOIN clean.dim_job j ON j.job_key = o.job_key
@@ -168,12 +171,13 @@ def _build_posting_week(cur, p) -> dict:
     """, {**p, "many": many})
     cur.execute("""
         SELECT count(*) FILTER (WHERE NOT seen_on_snapshot), count(*) FILTER (WHERE is_shortage),
-               count(*) FILTER (WHERE is_reposted_many_apps), count(*) FILTER (WHERE is_entry_level_2plus)
+               count(*) FILTER (WHERE is_reposted_many_apps), count(*) FILTER (WHERE is_entry_2plus),
+               count(*) FILTER (WHERE is_junior_2plus)
         FROM metrics.posting_week WHERE week_end_date = %(e)s
     """, p)
-    carried, shortage, reposted_many, entry = cur.fetchone()
+    carried, shortage, reposted_many, entry, junior = cur.fetchone()
     return {"carried_forward": carried, "flag_shortage": shortage, "flag_reposted_many_apps": reposted_many,
-            "flag_entry_level_2plus": entry, "many_apps_threshold": many}
+            "flag_entry_2plus": entry, "flag_junior_2plus": junior, "many_apps_threshold": many}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -268,7 +272,8 @@ base AS (
     -- entry level and junior are separate flags: their shares differ several times over
     SELECT CASE WHEN pw.position_level = ANY(%(entry_levels)s) THEN 'entry_level_2plus_years'
                 ELSE 'junior_2plus_years' END,
-           pw.is_entry_level_2plus, pw.category, pw.ssoc_major_group, pw.position_level,
+           CASE WHEN pw.position_level = ANY(%(entry_levels)s) THEN pw.is_entry_2plus ELSE pw.is_junior_2plus END,
+           pw.category, pw.ssoc_major_group, pw.position_level,
            CASE WHEN pw.salary_usable THEN pw.salary_mid END
     FROM metrics.posting_week pw
     WHERE pw.week_end_date = %(e)s

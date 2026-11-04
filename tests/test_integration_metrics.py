@@ -139,12 +139,14 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
     out = _run(conn, D3, "test-w3")
     assert out["status"] == "ok" and out["week"]["snapshot_date"] == str(D3)
     pool = _all(conn, """SELECT left(job_uuid, 1), seen_on_snapshot, is_shortage, is_reposted_many_apps,
-                                is_entry_level_2plus FROM metrics.posting_week WHERE week_end_date = %s ORDER BY 1""", D3)
+                                is_entry_2plus, is_junior_2plus
+                         FROM metrics.posting_week WHERE week_end_date = %s ORDER BY 1""", D3)
     assert [r[0] for r in pool] == list("abcdeg")                       # f closed after D1
     flags = {r[0]: r[2:] for r in pool}
-    assert flags["c"] == (True, False, False)                           # shortage
-    assert flags["d"] == (False, True, False)                           # reposted with the P90 of applications (320)
-    assert flags["b"] == (False, False, True)                           # entry level asking 3 years
+    assert flags["c"] == (True, False, False, False)                    # shortage
+    assert flags["d"] == (False, True, False, False)                    # reposted with the P90 of applications (320)
+    assert flags["b"] == (False, False, True, False)                    # entry level asking 3 years
+    assert flags["e"] == (False, False, False, False)                   # junior asking 1 year: neither flag
     assert sum(sum(v) for v in flags.values()) == 3
 
     # competitiveness, overall. Stock per posting (applications / days since posting, at least 1 day):

@@ -118,6 +118,16 @@ def test_no_signal_threshold_is_hard_coded_in_the_sql():
     assert not re.search(r"applications_total\s*<=\s*\d", src)
 
 
+def test_entry_level_and_junior_are_separate_posting_flags():
+    """Review 4 Nov #9: one column mixed them (907 entry + 4,303 junior on 3 Nov)."""
+    cols = _table_blocks(SCHEMA)["posting_week"]
+    assert "is_entry_2plus" in cols and "is_junior_2plus" in cols and "is_entry_level_2plus" not in cols
+    assert "is_entry_level_2plus" not in build_week.POSTING_WEEK_SQL + build_week.UNREALISTIC_SQL
+    # an existing warehouse gets the same columns from the upgrade block at the end of 05
+    assert "ADD COLUMN IF NOT EXISTS is_junior_2plus" in SCHEMA
+    assert "DROP COLUMN IF EXISTS is_entry_level_2plus" in SCHEMA
+
+
 def test_shortage_medians_describe_the_shortage_postings():
     """Review 4 Nov #8: over all postings with the skill, every top skill showed 0.0."""
     sql = " ".join(build_week.SHORTAGE_SQL.split())
