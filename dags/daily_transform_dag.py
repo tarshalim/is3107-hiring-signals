@@ -17,11 +17,13 @@ Design, following L7:
   - retries with a delay for temporary errors (database restarting), and a sensor timeout at about
     20:00 SGT for the permanent case (the raw day never arrives) so the run fails clearly instead of
     hanging. A sensor timeout is not retried.
-  - time zone: the snapshot is labelled with the Singapore date, like the ingest DAG, never with
-    Airflow's UTC-based `ds` (which is the start of the data interval and would be a day behind).
+  - which day: the Singapore date of the run's data_interval_end (transform/run_context.py), never
+    Airflow's UTC-based `ds` (the start of the data interval, a day behind) and never the wall clock:
+    clearing an old run must reload that run's day, not today's. (The ingest DAG does use the wall
+    clock, on purpose: the API only serves today's postings, so a past day cannot be re-fetched.)
   - catchup=False: a past day whose raw snapshot was never collected cannot be fetched later, so
-    backfilling makes no sense. An old day that IS in raw can be reloaded by triggering the DAG
-    with {"snapshot_date": "2026-10-24"} in the run config.
+    backfilling makes no sense. An old day that IS in raw can be reloaded by clearing its run, or by
+    triggering the DAG with {"snapshot_date": "2026-10-24"} in the run config.
 
 Why a sensor on the warehouse and not a Dataset/Asset dependency on the ingest DAG:
   1. The contract is "the day's rows are in raw.ingest_runs", whoever put them there: the ingest DAG,
@@ -51,6 +53,7 @@ except ImportError:  # Airflow 2
 
 from quality.clean_checks import failed_checks, run_checks, summarise
 from transform.load_reference import load_reference
+from transform.run_context import snapshot_date_for_run
 from transform.skill_mapping import match_rate_report
 from transform.transform_snapshot import transform_snapshot, write_run_summary
 
@@ -66,12 +69,10 @@ def _warehouse_conn():
 
 
 def _snapshot_date_from_context() -> str:
-    """Run config {"snapshot_date": "YYYY-MM-DD"} wins; otherwise today in Singapore time."""
+    """Run config {"snapshot_date": "YYYY-MM-DD"} wins; otherwise the Singapore date of data_interval_end."""
     ctx = get_current_context()
     override = (ctx.get("params") or {}).get("snapshot_date")
-    if override:
-        return str(override)
-    return pendulum.now(SGT).to_date_string()
+    return snapshot_date_for_run(override, ctx["data_interval_end"])
 
 
 @dag(

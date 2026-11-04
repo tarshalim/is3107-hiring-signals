@@ -72,6 +72,15 @@ def test_sensor_waits_until_about_20_00_for_a_late_ingest():
     assert 19.5 <= start + timeout_hours <= 20.5
 
 
+def test_snapshot_date_comes_from_the_run_not_the_wall_clock():
+    src = DAG_FILE.read_text(encoding="utf-8")
+    fn = next(n for n in ast.parse(src).body
+              if isinstance(n, ast.FunctionDef) and n.name == "_snapshot_date_from_context")
+    body = ast.unparse(fn)
+    assert "data_interval_end" in body and "snapshot_date_for_run" in body
+    assert "now(" not in body
+
+
 def _module_level_imports(path):
     """Names imported at the top level of a module (not inside a function)."""
     names = set()
