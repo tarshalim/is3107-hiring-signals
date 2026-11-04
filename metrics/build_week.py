@@ -43,8 +43,9 @@ THRESHOLDS = {
     "salary_min_postings": 30,       # open postings with the skill and a usable salary range
     "demand_min_postings": 30,       # postings with the skill across the whole demand window
     "demand_weeks": 6,               # posting weeks kept in skill_demand, counting back from the snapshot's week
-    "min_companies": 5,              # employers behind a barrier skill, or behind a skill's shortage postings
-                                     # (on 25 Oct "Aircraft Systems" had 40 shortage postings from ONE employer)
+    "min_companies": 10,             # employers behind a barrier skill, or behind a skill's shortage postings
+                                     # (on 25 Oct "Aircraft Systems" had 40 shortage postings from ONE employer;
+                                     # on 3 Nov, with 5, Metal Fabrication's 57 shortage postings came from 5 firms)
     # usable monthly salary: below 300 are hourly or daily rates typed into the monthly field (for example $12 to
     # $24 "per month" for a packing job, 1,395 postings below 300 on 25 Oct) and placeholders like $1, above
     # 100,000 are annual figures
