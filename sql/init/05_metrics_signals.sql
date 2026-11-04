@@ -93,7 +93,9 @@ CREATE TABLE IF NOT EXISTS metrics.posting_week (
     views_per_day_since_posting NUMERIC(12,4),      -- views_total / max(days since original posting, 1)
     is_shortage            BOOLEAN  NOT NULL,       -- reposted repeatedly and still few applications
     is_reposted_many_apps  BOOLEAN  NOT NULL,       -- reposted although it draws many applications per day (week's P90)
-    is_barrier_posting     BOOLEAN  NOT NULL,       -- views per day at or above its SSOC major group's P75, but applications
+    barrier_group          TEXT,                    -- barrier comparison group: 2-digit SSOC (e.g. '24') when it has
+                                                    -- thresholds.barrier_group_min_postings postings, else 1-digit ('2')
+    is_barrier_posting     BOOLEAN  NOT NULL,       -- views per day at or above its barrier_group's P75, but applications
                                                     -- per view at most thresholds.barrier_max_rate_ratio x the group's
     is_entry_2plus         BOOLEAN  NOT NULL,       -- "Fresh/entry level" position asking 2+ years
     is_junior_2plus        BOOLEAN  NOT NULL,       -- "Junior Executive" position asking 2+ years (kept apart: a far higher share)
@@ -108,7 +110,7 @@ CREATE TABLE IF NOT EXISTS metrics.posting_week (
 
 -- Signal 1, barrier skills: which skills sit in postings people look at a lot and then do not apply to,
 -- compared with similar jobs? A posting-level flag (posting_week.is_barrier_posting, judged within its
--- SSOC major group) and a lift, like shortage_skill.
+-- posting_week.barrier_group: 2-digit SSOC, or 1-digit when the 2-digit group is small) and a lift, like shortage_skill.
 CREATE TABLE IF NOT EXISTS metrics.barrier_skill (
     week_end_date       DATE    NOT NULL,
     snapshot_date       DATE    NOT NULL,
@@ -123,7 +125,7 @@ CREATE TABLE IF NOT EXISTS metrics.barrier_skill (
     top_company_share   NUMERIC(6,4),               -- share of the barrier postings from the single biggest employer
                                                     -- (above thresholds.max_top_company_share: not flagged; NULL: none)
     barrier_share       NUMERIC(8,4),               -- barrier_postings / postings
-    expected_share      NUMERIC(8,4),               -- the share if each posting behaved like its SSOC major group's average
+    expected_share      NUMERIC(8,4),               -- the share if each posting behaved like its barrier_group's average
     lift                NUMERIC(10,3),              -- barrier_share / expected_share. 2 = twice as common as its occupations predict
     views               BIGINT  NOT NULL,
     applications        BIGINT  NOT NULL,
@@ -272,3 +274,5 @@ ALTER TABLE metrics.barrier_skill DROP COLUMN IF EXISTS views_vs_overall;
 -- one bulk employer cannot make a barrier or shortage skill (thresholds.max_top_company_share)
 ALTER TABLE metrics.barrier_skill  ADD COLUMN IF NOT EXISTS top_company_share NUMERIC(6,4);
 ALTER TABLE metrics.shortage_skill ADD COLUMN IF NOT EXISTS top_company_share NUMERIC(6,4);
+-- barrier compared within 2-digit SSOC groups (1-digit fallback)
+ALTER TABLE metrics.posting_week ADD COLUMN IF NOT EXISTS barrier_group TEXT;

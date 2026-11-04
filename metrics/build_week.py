@@ -57,10 +57,13 @@ THRESHOLDS = {
     # 100,000 are annual figures
     "salary_floor": 300,
     "salary_ceiling": 100000,
-    # barrier skills (review 4 Nov #6: views per day, compared within the same SSOC major group). A barrier POSTING
-    # is among the most viewed per day in its SSOC major group (the group's P75 or more) but gets at most 0.8 times
-    # the group's applications per view. A barrier SKILL turns up in barrier postings at least 1.5 times as often
-    # as its postings' occupation groups would predict (lift), in 25+ barrier postings from min_companies employers
+    # barrier skills (review 4 Nov #6: views per day, compared within similar jobs). A posting's comparison group
+    # (posting_week.barrier_group) is its 2-digit SSOC sub-major group when that has at least
+    # barrier_group_min_postings open postings that week, else its 1-digit SSOC major group. A barrier POSTING is
+    # among the most viewed per day in its group (the group's P75 or more) but gets at most 0.8 times the group's
+    # applications per view. A barrier SKILL turns up in barrier postings at least 1.5 times as often as its
+    # postings' groups would predict (lift), in 25+ barrier postings from min_companies employers
+    "barrier_group_min_postings": 200,
     "barrier_views_percentile": 0.75,
     "barrier_max_rate_ratio": 0.8,
     "barrier_min_lift": 1.5,
@@ -157,7 +160,7 @@ SELECT %(e)s, %(s)s, o.job_uuid, o.job_key, o.snapshot_date, o.snapshot_date = %
             THEN round(o.views_total::numeric / GREATEST(o.days_since_original_posting, 1), 4) END,
        (o.repost_count >= %(shortage_min_reposts)s AND o.applications_total <= %(shortage_max_applications)s),
        FALSE,      -- set below, once the week's P90 of applications per day is known
-       FALSE,      -- set below, once each SSOC major group's views per day and apply rate are known
+       FALSE,      -- set below, once each comparison group's views per day and apply rate are known
        -- two separate flags: entry level and junior asking 2+ years (their shares differ several times over)
        (j.position_level = ANY(%(entry_levels)s)
         AND NOT j.exp_out_of_range AND j.min_years_exp BETWEEN %(entry_min_years)s AND %(exp_max_valid)s) IS TRUE,
@@ -168,24 +171,36 @@ JOIN clean.dim_job j ON j.job_key = o.job_key
 """
 
 
-# A barrier posting: among the most viewed per day in its own SSOC major group, but few applications per view
-# for that group. Compared within the group so that occupations with many viewers and few applicants anyway
+# Each posting's comparison group: the 2-digit SSOC code (e.g. '24', business and administration professionals)
+# when that group has enough open postings this week for a stable P75, else the 1-digit major group (e.g. '2').
+# On 3 Nov: 31 two-digit groups and 6 one-digit fallbacks; 573 of 88,610 postings fell back.
+BARRIER_GROUP_SQL = """
+UPDATE metrics.posting_week pw
+SET barrier_group = CASE WHEN c.n >= %(barrier_group_min_postings)s THEN left(pw.ssoc_code, 2)
+                         ELSE pw.ssoc_major_group::text END
+FROM (SELECT left(ssoc_code, 2) AS ssoc2, count(*) AS n
+      FROM metrics.posting_week WHERE week_end_date = %(e)s GROUP BY 1) c
+WHERE pw.week_end_date = %(e)s AND c.ssoc2 IS NOT DISTINCT FROM left(pw.ssoc_code, 2)
+"""
+
+# A barrier posting: among the most viewed per day in its comparison group, but few applications per view for
+# that group. Compared within similar jobs so that occupations with many viewers and few applicants anyway
 # (cleaning, packing, driving) do not make every one of their skills look like a barrier.
 BARRIER_POSTING_SQL = """
 WITH grp AS (
-    SELECT ssoc_major_group,
+    SELECT barrier_group,
            percentile_cont(%(barrier_views_percentile)s) WITHIN GROUP (ORDER BY views_per_day_since_posting) AS high_views,
            sum(applications_total)::numeric / NULLIF(sum(views_total), 0) AS apply_rate
     FROM metrics.posting_week
     WHERE week_end_date = %(e)s
-    GROUP BY ssoc_major_group
+    GROUP BY barrier_group
 )
 UPDATE metrics.posting_week pw
 SET is_barrier_posting = (pw.views_per_day_since_posting >= g.high_views
                           AND pw.applications_total::numeric / NULLIF(pw.views_total, 0)
                               <= %(barrier_max_rate_ratio)s * g.apply_rate) IS TRUE
 FROM grp g
-WHERE pw.week_end_date = %(e)s AND pw.ssoc_major_group IS NOT DISTINCT FROM g.ssoc_major_group
+WHERE pw.week_end_date = %(e)s AND pw.barrier_group IS NOT DISTINCT FROM g.barrier_group
 """
 
 
@@ -208,6 +223,7 @@ def _build_posting_week(cur, p) -> dict:
                                      AND apps_per_day_since_posting >= %(many)s) IS TRUE
         WHERE week_end_date = %(e)s
     """, {**p, "many": many})
+    cur.execute(BARRIER_GROUP_SQL, p)
     cur.execute(BARRIER_POSTING_SQL, p)
     cur.execute("""
         SELECT count(*) FILTER (WHERE NOT seen_on_snapshot), count(*) FILTER (WHERE is_shortage),
@@ -246,10 +262,10 @@ INSERT INTO metrics.barrier_skill (week_end_date, snapshot_date, skill_ref, skil
     views, applications, apply_rate, overall_apply_rate, rate_vs_overall, is_barrier)
 WITH {_POOL_SKILL}, {_SKILL_NAMES}, {_top_company("is_barrier_posting")},
 group_share AS (
-    -- share of barrier postings in each SSOC major group: what a posting of that group shows on average
-    SELECT ssoc_major_group, avg(CASE WHEN is_barrier_posting THEN 1.0 ELSE 0.0 END) AS share
+    -- share of barrier postings in each comparison group: what a posting of that group shows on average
+    SELECT barrier_group, avg(CASE WHEN is_barrier_posting THEN 1.0 ELSE 0.0 END) AS share
     FROM metrics.posting_week WHERE week_end_date = %(e)s
-    GROUP BY ssoc_major_group
+    GROUP BY barrier_group
 ),
 overall AS (
     SELECT sum(applications_total)::numeric / NULLIF(sum(views_total), 0) AS apply_rate
@@ -264,7 +280,7 @@ per_skill AS (
            sum(pw.views_total) AS views, sum(pw.applications_total) AS applications
     FROM pool_skill ps
     JOIN metrics.posting_week pw ON pw.week_end_date = %(e)s AND pw.job_uuid = ps.job_uuid
-    JOIN group_share gs ON gs.ssoc_major_group IS NOT DISTINCT FROM pw.ssoc_major_group
+    JOIN group_share gs ON gs.barrier_group IS NOT DISTINCT FROM pw.barrier_group
     GROUP BY ps.skill_ref
     HAVING count(*) >= %(skill_min_postings)s AND count(DISTINCT pw.company_name) >= %(min_companies)s
 ),

@@ -166,7 +166,11 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
     assert _one(conn, """SELECT postings FROM metrics.competitiveness WHERE week_end_date = %s
                          AND group_type = 'skill' AND group_label = 'Collaboration'""", D3) == (5,)
 
-    # barrier postings, judged within the SSOC major group. Group 2 (a, b, d, e, g) views per day on D3:
+    # barrier comparison groups: the 2-digit SSOC groups 22 and 83 have far fewer than 200 postings, so every
+    # posting falls back to its 1-digit major group (tested the other way at the end)
+    assert _all(conn, """SELECT barrier_group, count(*) FROM metrics.posting_week WHERE week_end_date = %s
+                         GROUP BY 1 ORDER BY 1""", D3) == [("2", 5), ("8", 1)]
+    # barrier postings, judged within the comparison group. Group 2 (a, b, d, e, g) views per day on D3:
     # e 30/2, b 70/2, a 160/2, g 120/1, d 1200/2 = 15, 35, 80, 120, 600 -> P75 120. The group's applications
     # per view are 339 / 1580 = 0.215, so at most 0.8 x 0.215 = 0.172: g (7/120 = 0.058) yes, d (0.267) no.
     # c is alone in group 8, so its rate IS the group's rate: never a barrier posting, however many views.
@@ -286,3 +290,12 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
     assert _all(conn, "SELECT skill_name FROM metrics.shortage_skill WHERE week_end_date = %s", D3) == []
     assert _one(conn, "SELECT thresholds->>'max_top_company_share' FROM metrics.run_log WHERE week_end_date = %s",
                 D3) == ("0.5",)
+
+    # ---- 2-digit comparison groups: with a minimum of 1 posting, groups 22 and 83 are big enough and are used.
+    # They hold the same postings as 2 and 8 here, so the barrier numbers stay the same ------------------------
+    run_week(conn, D3 - timedelta(days=7), D3, run_id="test-w3-two-digit",
+             thresholds={**SMALL, "barrier_group_min_postings": 1})
+    assert _all(conn, """SELECT barrier_group, count(*) FROM metrics.posting_week WHERE week_end_date = %s
+                         GROUP BY 1 ORDER BY 1""", D3) == [("22", 5), ("83", 1)]
+    assert _all(conn, """SELECT barrier_share, expected_share, lift FROM metrics.barrier_skill
+                         WHERE week_end_date = %s AND is_barrier""", D3) == [(Decimal("1.0000"), Decimal("0.2000"), Decimal("5.000"))]

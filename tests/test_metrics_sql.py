@@ -131,7 +131,7 @@ def test_entry_level_and_junior_are_separate_posting_flags():
 def test_barrier_uses_views_per_day_within_the_ssoc_group_and_a_lift():
     """Review 4 Nov #6: raw views favoured old postings, and comparing with ALL postings let occupation decide."""
     posting = " ".join(build_week.BARRIER_POSTING_SQL.split())
-    assert "ORDER BY views_per_day_since_posting" in posting and "GROUP BY ssoc_major_group" in posting
+    assert "ORDER BY views_per_day_since_posting" in posting and "GROUP BY barrier_group" in posting
     assert "views_total)::numeric / NULLIF(count(*)" not in build_week.BARRIER_SQL     # no raw views per posting
     assert "lift >= %(barrier_min_lift)s" in " ".join(build_week.BARRIER_SQL.split())
     cols = _table_blocks(SCHEMA)["barrier_skill"]
@@ -157,6 +157,20 @@ def test_one_bulk_employer_cannot_make_a_barrier_or_shortage_skill():
     assert "top_company_share" in blocks["barrier_skill"] and "top_company_share" in blocks["shortage_skill"]
     for table in ("barrier_skill ", "shortage_skill"):      # the upgrade block adds it to an existing warehouse
         assert f"ALTER TABLE metrics.{table} ADD COLUMN IF NOT EXISTS top_company_share" in SCHEMA
+
+
+def test_barrier_compares_within_2_digit_ssoc_groups_with_a_1_digit_fallback():
+    """A 2-digit SSOC group with at least barrier_group_min_postings (200) open postings is the comparison group,
+    otherwise the 1-digit major group. Set before the barrier flag, which groups by it, as does the expected share."""
+    assert THRESHOLDS["barrier_group_min_postings"] == 200
+    group = " ".join(build_week.BARRIER_GROUP_SQL.split())
+    assert ("CASE WHEN c.n >= %(barrier_group_min_postings)s THEN left(pw.ssoc_code, 2) "
+            "ELSE pw.ssoc_major_group::text END") in group
+    src = (REPO / "metrics" / "build_week.py").read_text(encoding="utf-8")
+    assert src.index("cur.execute(BARRIER_GROUP_SQL, p)") < src.index("cur.execute(BARRIER_POSTING_SQL, p)")
+    assert "GROUP BY barrier_group" in " ".join(build_week.BARRIER_SQL.split())
+    assert "barrier_group" in _table_blocks(SCHEMA)["posting_week"]
+    assert "ALTER TABLE metrics.posting_week ADD COLUMN IF NOT EXISTS barrier_group TEXT" in SCHEMA
 
 
 def test_shortage_medians_describe_the_shortage_postings():
