@@ -10,8 +10,9 @@ point that clean data should be flagged, not silently dropped:
   - strings are trimmed and inner whitespace collapsed (85 titles a day have stray spaces)
   - the SSOC code stays TEXT: '01234' is a code, not a number
   - salary -> numeric (Decimal); missing -> NULL
-  - years of experience outside 0..40 is capped at 40 and FLAGGED with exp_out_of_range
-    (one posting asks for 88 years, one for 50); the raw value is kept in min_years_exp_raw
+  - years of experience outside 0..30 is capped at 30 and FLAGGED with exp_out_of_range
+    (postings ask for 32, 50 and 88 years); the raw value is kept in min_years_exp_raw. The weekly
+    metrics use the same cap (metrics/build_week.py imports EXP_MAX), so there is one number
   - dates 'YYYY-MM-DD' -> date; anything unreadable -> NULL (the DQ step counts them)
   - a payload with no uuid or no view/application counters cannot become a fact row, so it is
     rejected (RejectRow) and written to clean.rejected_rows instead of crashing the day
@@ -23,7 +24,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 EXP_MIN = 0
-EXP_MAX = 40
+EXP_MAX = 30     # was 40 until 4 Nov; the metrics already treated 31+ as typing errors
 SEP = "|"
 
 # dim_job columns that the parser fills, in insert order. attr_hash is computed over these plus

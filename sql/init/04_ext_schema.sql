@@ -216,8 +216,12 @@ CREATE TABLE IF NOT EXISTS ext.posting_history_ssoc_week (
 -- ---------------------------------------------------------------------------------------------
 
 -- Postings open on the latest snapshot, with the attributes as they were that day.
+-- salary_usable is the same rule as metrics.posting_week.salary_usable (salary_floor and salary_ceiling in
+-- metrics/build_week.py THRESHOLDS; tests/test_metrics_sql.py checks the numbers match): a monthly range from
+-- 300 to 100,000. Below are hourly or daily rates typed as monthly and placeholders like $1, above are annual.
 CREATE OR REPLACE VIEW ext.v_now_posting AS
-SELECT j.*
+SELECT j.*,
+       (j.salary_min >= 300 AND j.salary_max >= j.salary_min AND j.salary_max <= 100000) IS TRUE AS salary_usable
 FROM clean.fact_job_day f
 JOIN clean.dim_job j ON j.job_key = f.job_key
 WHERE f.snapshot_date = (SELECT max(snapshot_date) FROM clean.fact_job_day);
@@ -255,23 +259,28 @@ LEFT JOIN ext.mcf2019_skill k ON k.tag_key = coalesce(s19.tag_key, snow.tag_key)
 CROSS JOIN p19 CROSS JOIN pnow;
 
 -- Median advertised monthly salary, 2019 vs now, overall and per MCF category. A posting counts in every
--- category it lists. Only disclosed salaries (2019) and salaries not hidden by the employer (now).
+-- category it lists. Only disclosed salaries (2019) and salaries not hidden by the employer (now), and on both
+-- sides only usable monthly ranges (300 to 100,000, as v_now_posting.salary_usable).
 CREATE OR REPLACE VIEW ext.v_salary_2019_vs_now AS
-WITH y19 AS (
-    SELECT 'all'::text AS category, salary_monthly_mid AS mid FROM ext.mcf2019_posting WHERE salary_disclosed
+WITH p19 AS (
+    SELECT * FROM ext.mcf2019_posting
+    WHERE salary_disclosed AND salary_monthly_min >= 300 AND salary_monthly_max >= salary_monthly_min
+      AND salary_monthly_max <= 100000
+),
+y19 AS (
+    SELECT 'all'::text AS category, salary_monthly_mid AS mid FROM p19
     UNION ALL
     SELECT c.category, p.salary_monthly_mid
-    FROM ext.mcf2019_posting p
+    FROM p19 p
     CROSS JOIN LATERAL unnest(string_to_array(p.categories, '|')) AS c(category)
-    WHERE p.salary_disclosed
 ),
 ynow AS (
-    SELECT 'all'::text AS category, salary_mid AS mid FROM ext.v_now_posting WHERE NOT salary_is_hidden
+    SELECT 'all'::text AS category, salary_mid AS mid FROM ext.v_now_posting WHERE NOT salary_is_hidden AND salary_usable
     UNION ALL
     SELECT c.category, n.salary_mid
     FROM ext.v_now_posting n
     CROSS JOIN LATERAL unnest(string_to_array(n.categories, '|')) AS c(category)
-    WHERE NOT n.salary_is_hidden
+    WHERE NOT n.salary_is_hidden AND n.salary_usable
 ),
 a AS (SELECT category, count(mid) AS n, percentile_cont(0.5) WITHIN GROUP (ORDER BY mid) AS med FROM y19 GROUP BY 1),
 b AS (SELECT category, count(mid) AS n, percentile_cont(0.5) WITHIN GROUP (ORDER BY mid) AS med FROM ynow GROUP BY 1)
@@ -290,12 +299,15 @@ CREATE OR REPLACE VIEW ext.v_pay_change_by_ssoc_group AS
 WITH adv19 AS (
     SELECT ssoc_major_group AS g, count(*) AS n,
            percentile_cont(0.5) WITHIN GROUP (ORDER BY salary_monthly_mid) AS med
-    FROM ext.mcf2019_posting WHERE salary_disclosed AND ssoc_major_group IS NOT NULL GROUP BY 1
+    FROM ext.mcf2019_posting
+    WHERE salary_disclosed AND ssoc_major_group IS NOT NULL
+      AND salary_monthly_min >= 300 AND salary_monthly_max >= salary_monthly_min AND salary_monthly_max <= 100000
+    GROUP BY 1
 ),
 advnow AS (
     SELECT ssoc_major_group AS g, count(*) AS n,
            percentile_cont(0.5) WITHIN GROUP (ORDER BY salary_mid) AS med
-    FROM ext.v_now_posting WHERE NOT salary_is_hidden AND ssoc_major_group IS NOT NULL GROUP BY 1
+    FROM ext.v_now_posting WHERE NOT salary_is_hidden AND salary_usable AND ssoc_major_group IS NOT NULL GROUP BY 1
 ),
 lfs AS (
     SELECT ssoc_major_group AS g, min(occupation_group) AS occupation_group,
@@ -327,7 +339,7 @@ WITH adv AS (
            percentile_cont(0.5) WITHIN GROUP (ORDER BY salary_max) AS med_max,
            percentile_cont(0.5) WITHIN GROUP (ORDER BY salary_mid) AS med_mid
     FROM ext.v_now_posting
-    WHERE NOT salary_is_hidden AND ssoc_code IS NOT NULL
+    WHERE NOT salary_is_hidden AND salary_usable AND ssoc_code IS NOT NULL
     GROUP BY ssoc_code
 ),
 ows AS (

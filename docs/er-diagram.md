@@ -57,7 +57,7 @@ erDiagram
         text     categories
         text     education_code
         smallint min_years_exp_raw "0 to 88 as typed"
-        smallint min_years_exp "capped at 40"
+        smallint min_years_exp "capped at 30"
         boolean  exp_out_of_range
         numeric  salary_min
         numeric  salary_max

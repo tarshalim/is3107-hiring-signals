@@ -108,7 +108,7 @@ def test_two_days_then_rerun(conn, make_payload):
     assert s1["versions_inserted"] == 3 and s1["fact_rows_with_previous"] == 0
     assert _count(conn, "SELECT count(*) FROM clean.dim_skill") == 3          # Nursing, Perform Ecg, Team Player
     assert _count(conn, "SELECT count(*) FROM clean.bridge_job_skill") == 9
-    assert _count(conn, "SELECT min_years_exp FROM clean.dim_job WHERE job_uuid = %s", "b" * 32) == 40
+    assert _count(conn, "SELECT min_years_exp FROM clean.dim_job WHERE job_uuid = %s", "b" * 32) == 30
     assert _count(conn, "SELECT count(*) FROM clean.dim_job WHERE exp_out_of_range") == 1
     assert _count(conn, "SELECT match_method FROM clean.dim_skill WHERE mcf_skill_name = 'Team Player'") == "alias"
 

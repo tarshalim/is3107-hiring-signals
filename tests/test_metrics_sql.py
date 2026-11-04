@@ -15,6 +15,7 @@ from metrics import build_week
 from metrics.build_week import (BUILDERS, METRIC_CHECKS, SIGNAL_TABLES, THRESHOLDS, build_table, resolve_week,
                                 sql_params)
 from transform import snapshot_week as sw
+from transform.parse import EXP_MAX
 
 REPO = Path(__file__).resolve().parent.parent
 SQL_DIR = REPO / "sql" / "init"
@@ -99,7 +100,8 @@ def test_thresholds_are_sane():
     assert 0 < t["barrier_max_rate_ratio"] < 1
     assert 0 < t["many_apps_percentile"] < 1
     assert t["shortage_min_reposts"] >= 1 and t["shortage_max_applications"] >= 0
-    assert t["entry_min_years"] == 2 and t["exp_max_valid"] <= 40
+    assert t["entry_min_years"] == 2 and t["exp_max_valid"] == EXP_MAX == 30   # one cap for clean and metrics
+    assert (t["unrealistic_min_reposts"], t["shortage_min_reposts"]) == (1, 2)
     assert "Fresh/entry level" in t["entry_levels"] and "Junior Executive" in t["junior_levels"]
     assert not set(t["entry_levels"]) & set(t["junior_levels"])           # one posting, one flag
     assert (t["salary_floor"], t["salary_ceiling"]) == (300, 100000)      # monthly; hourly rates and annual pay left out
@@ -107,6 +109,23 @@ def test_thresholds_are_sane():
     for k in ("skill_min_postings", "group_min_postings", "salary_min_postings", "demand_min_postings",
               "shortage_min_flagged", "demand_weeks", "max_gap_snapshots", "min_companies"):
         assert t[k] >= 1, k
+
+
+def test_no_signal_threshold_is_hard_coded_in_the_sql():
+    """Review 4 Nov #13: every number a flag uses comes from THRESHOLDS (and so lands in run_log.thresholds)."""
+    src = (REPO / "metrics" / "build_week.py").read_text(encoding="utf-8")
+    assert not re.search(r"repost_count\s*>=\s*\d", src)
+    assert not re.search(r"applications_total\s*<=\s*\d", src)
+
+
+def test_ext_views_use_the_same_usable_salary_rule_as_the_metrics():
+    ext = (SQL_DIR / "04_ext_schema.sql").read_text(encoding="utf-8")
+    floor, ceiling = THRESHOLDS["salary_floor"], THRESHOLDS["salary_ceiling"]
+    rule = f"(j.salary_min >= {floor} AND j.salary_max >= j.salary_min AND j.salary_max <= {ceiling}) IS TRUE AS salary_usable"
+    assert rule in ext
+    assert ext.count(f"salary_monthly_min >= {floor}") == 2 and ext.count(f"salary_monthly_max <= {ceiling}") == 2
+    # every view reading current salaries filters on the rule
+    assert len(re.findall(r"NOT n?\.?salary_is_hidden(?! AND n?\.?salary_usable)", ext)) == 0
 
 
 def test_sql_params_dates():

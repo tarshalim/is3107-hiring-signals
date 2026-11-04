@@ -32,6 +32,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from quality.clean_checks import Check, evaluate, summarise
 from metrics.weeks import MAX_GAP_SNAPSHOTS, week_context
+from transform.parse import EXP_MAX
 from transform.snapshot_week import latest_snapshot_in_week
 
 THRESHOLDS = {
@@ -59,11 +60,14 @@ THRESHOLDS = {
     "shortage_max_applications": 2,
     "shortage_min_flagged": 25,      # flagged postings carrying the skill
     # unrealistic requirements
+    # "reposted" here is once or more, against twice for shortage: a posting reposted even once although it was
+    # already drawing many applications is the odd case; shortage needs the stronger "again and again"
+    "unrealistic_min_reposts": 1,
     "many_apps_percentile": 0.9,     # "many applications" = the P90 of open postings that week
     "entry_levels": ["Fresh/entry level"],
     "junior_levels": ["Junior Executive"],   # reported as its own flag: 46% ask 2+ years against 6.6% at entry level
     "entry_min_years": 2,
-    "exp_max_valid": 30,             # 32, 50 and 88 years are typing errors (data check), left out of the flag
+    "exp_max_valid": EXP_MAX,        # the clean layer's cap (30): 32, 50 and 88 years are typing errors
 }
 
 # The MOM validation is not built here: it is metrics.mcf_vs_mom_share, written by compare_mcf_with_mom in
@@ -158,7 +162,8 @@ def _build_posting_week(cur, p) -> dict:
     cur.execute(POSTING_WEEK_SQL, p)
     many = many_apps_threshold(cur, p)
     cur.execute("""
-        UPDATE metrics.posting_week SET is_reposted_many_apps = (repost_count >= 1 AND applications_total >= %(many)s)
+        UPDATE metrics.posting_week
+        SET is_reposted_many_apps = (repost_count >= %(unrealistic_min_reposts)s AND applications_total >= %(many)s)
         WHERE week_end_date = %(e)s
     """, {**p, "many": many})
     cur.execute("""
@@ -304,7 +309,8 @@ def _build_unrealistic(cur, p) -> dict:
                 f"with a usable experience value")
 
     rules = {
-        "rule_reposted": (f"reposted (repost_count 1 or more) with applications_total {many} or more, the P{pct} "
+        "rule_reposted": (f"reposted (repost_count {p['unrealistic_min_reposts']} or more) with applications_total "
+                          f"{many} or more, the P{pct} "
                           f"of open postings this week. Base: all open postings"),
         "rule_entry": experience_rule(p["entry_levels"]),
         "rule_junior": experience_rule(p["junior_levels"]),
