@@ -1,8 +1,8 @@
 """Daily clean-and-warehouse load (role 2).
 
 wait_for_raw ─┐
-              ├─> transform_snapshot -> run_quality_checks -> log_run_stats
-load_reference┘
+              ├─> transform_snapshot -> run_quality_checks -┬-> refresh_dashboard_marts -> train_salary_model
+load_reference┘                                             └-> log_run_stats
 
 Runs every day at 10:30 Singapore time, after daily_mcf_ingest (10:00, about 24 minutes).
 Same TaskFlow style as dags/daily_ingest_dag.py (works on the team's Airflow 2.10 image and on the
@@ -53,6 +53,7 @@ except ImportError:  # Airflow 2
 
 from quality.clean_checks import failed_checks, run_checks, summarise
 from transform.load_reference import load_reference
+from transform.refresh_marts import rebuild_marts
 from transform.run_context import run_timings, snapshot_date_for_run
 from transform.skill_mapping import match_rate_report
 from transform.transform_snapshot import transform_snapshot, write_run_summary
@@ -145,6 +146,32 @@ def daily_mcf_transform():
         return summary
 
     @task
+    def refresh_dashboard_marts(dq_summary: dict) -> dict:
+        """Rebuilds the `mart` schema the Streamlit dashboard reads. Runs only after the quality checks
+        pass, so an anomalous day never reaches the dashboard."""
+        conn = _warehouse_conn()
+        try:
+            result = rebuild_marts(conn)
+        finally:
+            conn.close()
+        print(json.dumps(result))
+        return result
+
+    @task
+    def train_salary_model(marts: dict) -> dict:
+        """Retrains the salary estimator the dashboard's 'Salary estimator' tab uses (stretch goal). A leaf task:
+        if it fails the dashboard keeps the previous model and nothing else is affected. The import is here
+        so a missing numpy cannot stop the DAG file from loading."""
+        from transform.salary_model import train
+        conn = _warehouse_conn()
+        try:
+            result = train(conn)
+        finally:
+            conn.close()
+        print(json.dumps(result, default=str))
+        return result
+
+    @task
     def log_run_stats(snapshot_date: str, stats: dict, dq_summary: dict) -> dict:
         """One 'dag_run' row in clean.load_log plus the skill match rate, for the performance section.
         seconds = the transform's own run time; the sensor wait and wall time go in details (run_context.py)."""
@@ -169,6 +196,8 @@ def daily_mcf_transform():
     stats = transform_snapshot_task(snapshot_date, reference)
     dq = run_quality_checks(snapshot_date)
     stats >> dq
+    marts = refresh_dashboard_marts(dq)
+    train_salary_model(marts)
     log_run_stats(snapshot_date, stats, dq)
 
 

@@ -34,7 +34,8 @@ def test_dag_file_parses_and_has_the_planned_tasks():
     tree = ast.parse(DAG_FILE.read_text(encoding="utf-8"))
     tasks = dict(_task_function_names(tree))
     assert tasks["wait_for_raw"] == "task.sensor"
-    for name in ("load_reference_tables", "transform_snapshot_task", "run_quality_checks", "log_run_stats"):
+    for name in ("load_reference_tables", "transform_snapshot_task", "run_quality_checks",
+                 "refresh_dashboard_marts", "train_salary_model", "log_run_stats"):
         assert tasks[name] == "task"
 
 
