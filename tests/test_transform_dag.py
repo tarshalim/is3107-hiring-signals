@@ -55,6 +55,23 @@ def test_sensor_has_a_timeout_so_a_missing_day_fails_clearly():
     assert "AirflowFailException" in src
 
 
+def _module_constant(name):
+    """Value of a module-level constant like SENSOR_TIMEOUT = int(9.5 * 60 * 60), evaluated without Airflow."""
+    for node in ast.parse(DAG_FILE.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == name for t in node.targets):
+            return eval(compile(ast.Expression(node.value), "<const>", "eval"), {"int": int})
+    raise AssertionError(f"no {name} in the DAG file")
+
+
+def test_sensor_waits_until_about_20_00_for_a_late_ingest():
+    """Ingest finished at 14:49 and 15:31 on 27 and 28 Oct. From the 10:30 start, the sensor must still be
+    waiting at 15:31 and give up by about 20:00 SGT, not 13:30."""
+    timeout_hours = _module_constant("SENSOR_TIMEOUT") / 3600
+    start = 10.5
+    assert start + timeout_hours >= 15.5 + 1        # an hour of slack after the latest ingest seen
+    assert 19.5 <= start + timeout_hours <= 20.5
+
+
 def _module_level_imports(path):
     """Names imported at the top level of a module (not inside a function)."""
     names = set()

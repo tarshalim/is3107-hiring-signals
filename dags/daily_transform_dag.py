@@ -14,8 +14,9 @@ Design, following L7:
     so Airflow runs them in parallel (the lecturer's "separate blocks" point).
   - idempotent: transform_snapshot is delete-then-insert per snapshot_date plus ON CONFLICT upserts
     (transform/transform_snapshot.py), so a retry or a manual rerun gives the same tables.
-  - retries with a delay for temporary errors (database restarting), and a sensor timeout for the
-    permanent case (the raw day never arrives) so the run fails clearly instead of hanging.
+  - retries with a delay for temporary errors (database restarting), and a sensor timeout at about
+    20:00 SGT for the permanent case (the raw day never arrives) so the run fails clearly instead of
+    hanging. A sensor timeout is not retried.
   - time zone: the snapshot is labelled with the Singapore date, like the ingest DAG, never with
     Airflow's UTC-based `ds` (which is the start of the data interval and would be a day behind).
   - catchup=False: a past day whose raw snapshot was never collected cannot be fetched later, so
@@ -55,7 +56,9 @@ from transform.transform_snapshot import transform_snapshot, write_run_summary
 
 SGT = "Asia/Singapore"
 POKE_INTERVAL = 5 * 60          # check for the raw day every 5 minutes
-SENSOR_TIMEOUT = 3 * 60 * 60    # give up after 3 hours: ingest has 3 retries of 10 min plus a 24 min run
+# Give up at about 20:00 SGT (9.5 hours after the 10:30 start). Ingest normally ends by 10:45, but on
+# 27 and 28 Oct it ran until 14:49 and 15:31, and the old 3 hour timeout (13:30) missed both days.
+SENSOR_TIMEOUT = int(9.5 * 60 * 60)
 
 
 def _warehouse_conn():
