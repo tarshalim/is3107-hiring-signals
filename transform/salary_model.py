@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-MODEL_SQL = Path(__file__).resolve().parent.parent / "sql" / "init" / "04_salary_model.sql"
+MODEL_SQL = Path(__file__).resolve().parent.parent / "sql" / "init" / "08_salary_model.sql"
 
 ALPHA = 3.0                 # ridge penalty (features are 0/1, so this is "3 postings' worth" of shrinkage)
 MIN_SUPPORT = 20            # a feature needs this many training postings, otherwise it is noise

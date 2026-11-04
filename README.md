@@ -9,9 +9,10 @@ unrealistic requirements.
 
 | Folder | What goes there |
 |---|---|
-| `dags/` | Airflow DAGs (`daily_ingest_dag.py` now, weekly metrics later) |
-| `ingestion/` | API clients (MyCareersFuture now; Adzuna and MOM later) |
+| `dags/` | Airflow DAGs (daily ingest, 30-minute live poll, daily transform, weekly metrics) |
+| `ingestion/` | API clients (MyCareersFuture, MOM via data.gov.sg) |
 | `transform/` | Cleaning, deduplication, skill standardisation |
+| `metrics/` | Weekly hiring signals built from the clean layer |
 | `quality/` | Data-quality checks |
 | `sql/init/` | Warehouse schema, applied when the database is first created |
 | `dashboard/` | Streamlit dashboard (`app.py`, one module per tab in `tabs/`) |
@@ -53,9 +54,25 @@ docker compose exec warehouse psql -U jobs -d jobs -c \
 
 `catchup=False`: view and application counts can't be fetched for past days, so the DAG never backfills.
 
+## Near-real-time feed (every 30 minutes)
+
+`fetch_newest → load_poll → check_poll` (`dags/mcf_live_poll_dag.py`, DAG `mcf_live_poll`).
+
+- Reads the first `MCF_LIVE_PAGES` pages (default 3, so 300 postings) of the same newest-first list, 2 s between
+  pages, and appends one slim row per posting per poll to `raw.mcf_live_poll` (key `(poll_ts, job_uuid)`, never
+  updated). 144 API calls and about 5 MB a day.
+- `check_poll` runs 9 checks (rows present, all stored, no duplicate keys, counters, list order, pages out of step,
+  missed polls, and the share of pages the API served unchanged from its cache) into `raw.mcf_live_poll_dq`.
+- `metrics.live_first24h_summary` and `metrics.live_first24h_curve` give views and applications by hours since
+  posting (1, 6, 12, 24 h) by category and SSOC major group; `metrics.live_poll_status` shows one line per poll.
+
+Why 30-minute polling and not Kafka, numbers, the first real poll and deploy steps: `docs/live-feed.md`.
+On an existing warehouse: apply `sql/init/06_live_poll.sql` once, `docker compose up -d`, unpause `mcf_live_poll`
+(commands in `docs/live-feed.md`, section 5).
+
 ## Daily cleaning and warehouse load (role 2)
 
-`wait_for_raw` + `load_reference_tables` → `transform_snapshot` → `run_quality_checks` → `refresh_dashboard_marts` ? `train_salary_model`, plus `log_run_stats`
+`wait_for_raw` + `load_reference_tables` → `transform_snapshot` → `run_quality_checks` → `refresh_dashboard_marts` → `train_salary_model`, plus `log_run_stats`
 (`dags/daily_transform_dag.py`, 10:30 Singapore time, after the ingest DAG).
 
 - **transform_snapshot** reads one day from `raw.mcf_job_snapshots`, cleans every posting
@@ -65,10 +82,10 @@ docker compose exec warehouse psql -U jobs -d jobs -c \
   increase since the previous snapshot). Rerunning a day gives the same tables.
 - **run_quality_checks** runs 30 schema, range and business-rule checks and stores the verdicts in
   `clean.dq_results`. A `fail` severity check fails the run.
-- **refresh_dashboard_marts** rebuilds the `mart` schema (`sql/init/03_dashboard_marts.sql`) that the
+- **refresh_dashboard_marts** rebuilds the `mart` schema (`sql/init/07_dashboard_marts.sql`) that the
   dashboard reads. It runs only after the quality checks pass.
 - **train_salary_model** fits the salary estimator on postings that disclose a salary
-  (`transform/salary_model.py`, numpy only) and stores it in schema `ml` (`sql/init/04_salary_model.sql`).
+  (`transform/salary_model.py`, numpy only) and stores it in schema `ml` (`sql/init/08_salary_model.sql`).
   The dashboard tab reads the latest stored model. A failure here does not affect the marts.
 - **log_run_stats** writes step timings and the skill match rate to `clean.load_log`.
 
@@ -114,8 +131,8 @@ type and emerging skills:
 
 The tabs read pre-aggregated materialised views in schema `mart`, so a click is a lookup, not a scan of the
 fact table. The marts are rebuilt by the DAG's `refresh_dashboard_marts` task. On a database created before
-`03_dashboard_marts.sql` existed, build them once with `python -m transform.refresh_marts`, and apply
-`sql/init/04_salary_model.sql` before training the estimator.
+`07_dashboard_marts.sql` existed, build them once with `python -m transform.refresh_marts`, and apply
+`sql/init/08_salary_model.sql` before training the estimator.
 Week-over-week change needs 14 days of data; until then the dashboard says so instead of showing a number.
 
 To try the dashboard without crawl data, fill an **empty** warehouse with synthetic postings
@@ -125,6 +142,83 @@ To try the dashboard without crawl data, fill an **empty** warehouse with synthe
 python -m dashboard.demo_data --days 21 --postings 250000   # ~1.6M fact rows, about a minute
 python -m transform.refresh_marts
 python -m transform.salary_model                            # synthetic salaries follow level, experience and skills
+```
+
+## Weekly metrics (MOM comparison and hiring signals)
+
+One DAG, `weekly_metrics` (`dags/weekly_metrics_dag.py`, Tuesdays 14:00 Singapore time), with two independent
+branches that read the same week and the same snapshot:
+
+```
+refresh_mom_stats -> compare_mcf_with_mom
+pick_snapshot -> build_posting_week -> 6 signal tables in parallel -> check_and_log
+```
+
+- **refresh_mom_stats** downloads MOM's "Number of Job Vacancy by Occupation - Quarterly" from data.gov.sg
+  (`d_86dffa3d28e4c3ee085c3f99abad6e9f`, 1998-Q1 onwards, about 450 rows) with `ingestion/mom_client.py` and
+  upserts `raw.mom_vacancy_rows` and `clean.mom_vacancy_quarterly`. Figures before 2006 exclude the public sector.
+- **compare_mcf_with_mom** writes `metrics.mcf_vs_mom_share`: per occupation group, the share of MCF postings in
+  the latest snapshot of the run's week vs MOM's share of vacancies in the latest quarter, MOM's 1-year and
+  5-year change, and a `disagrees` flag when the shares differ by 10 percentage points or more.
+  `metrics.mom_vacancy_trend` is the long MOM series for the trend chart.
+- **pick_snapshot** → **build_posting_week** → six signal tables → **check_and_log** (`metrics/`) fill the tables of
+  `sql/init/05_metrics_signals.sql` from the open postings of the week end (`metrics.posting_week`): barrier
+  skills, skill shortages, unrealistic requirements, competitiveness, skill demand and skill salary.
+  `metrics.run_log` records the week (`week_end_date`, the interval's last day), the snapshot used and the checks.
+  `metrics.mcf_vs_mom_share` above is their MOM validation. Same steps without Airflow:
+  `python -m metrics.run --week-ending 2026-11-03`. Table meanings, thresholds, validation: `docs/weekly-metrics.md`.
+- Each run covers its data interval (Tuesday 14:00 to the next Tuesday 14:00 SGT, so snapshots Wednesday to
+  Tuesday), both branches use the latest snapshot of that week (`transform/snapshot_week.py`), and the run fails
+  with the week's dates if that week has no snapshot. `catchup=True` from 20 Oct 2026, so unpausing the DAG
+  backfills one run per week since the first snapshot (24 Oct). A rerun replaces its week's rows.
+- MOM publishes only 3 occupation groups (Split A) and PME vs non-PME (Split B, since 2013), so both sides are
+  mapped from the SSOC first digit with `data/reference/ssoc_major_to_mom_group.csv` and
+  `data/reference/mom_occupation_labels.csv`. Postings with no usable SSOC code are counted in an `unknown` row
+  and left out of the shares.
+
+On a warehouse created before these tables existed (the collector laptop), add them once by hand, then let
+compose recreate the Airflow containers for the new `./metrics` mount. Every file is safe to run twice. Never
+`docker compose down -v`: it deletes the warehouse volume. Full steps, including how to fill the weeks the DAG
+already ran: `docs/weekly-metrics.md`, section 3.
+
+```bash
+docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/03_mom_vacancies.sql
+docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/05_metrics_signals.sql
+docker compose up -d
+# Windows PowerShell:
+Get-Content sql/init/03_mom_vacancies.sql | docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+Get-Content sql/init/05_metrics_signals.sql | docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+docker compose up -d
+```
+
+Without Airflow: `python -m transform.mom_vacancies` (or `--skip-download` to rebuild only the comparison;
+`--week-ending 2026-10-27` for a past week, default today).
+
+## Extra data (`ext` schema)
+
+Ten daily snapshots are a short window, so `sql/init/04_ext_schema.sql` adds three sources that widen it
+(details, licences, row counts and findings: `docs/extra-data.md`):
+
+- **2019 MyCareersFuture crawl** (Kaggle, 20,296 postings) for "2019 vs now" on skills and pay
+- **MOM wage tables** (data.gov.sg API): actual wages for 562 SSOC occupations (June 2024), and median
+  income by occupation group 2001 to 2024
+- **Posting history** rebuilt from the posting dates inside our own snapshots: weekly new postings per skill
+  and per SSOC group, with a coverage label per week (only postings still open on 24 Oct can be seen)
+
+```bash
+python -m transform.posting_history                                   # after the daily transform
+python -m ingestion.datagov_wages                                     # downloads through the official API
+curl -L -o data/ext/kaggle_mcf2019/archive.zip --create-dirs   https://www.kaggle.com/api/v1/datasets/download/asrsaiteja/mycareerfuture-job-postings
+python -m ingestion.kaggle_mcf2019 data/ext/kaggle_mcf2019/archive.zip
+```
+
+The `weekly_ext_data` DAG (`dags/weekly_ext_data_dag.py`, Mondays 12:00) runs the same steps every week. On a
+warehouse created before this file existed, apply it once (safe to run twice), then unpause the DAG:
+
+```bash
+docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/04_ext_schema.sql
+# Windows PowerShell:
+Get-Content sql/init/04_ext_schema.sql | docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 ```
 
 ## Tests

@@ -7,6 +7,7 @@ snapshot every day.
 """
 import gzip
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -18,16 +19,30 @@ BASE_URL = "https://api.mycareersfuture.gov.sg/v2/jobs"
 PAGE_SIZE = 100
 USER_AGENT = "IS3107-student-project (NUS)"
 
+log = logging.getLogger(__name__)
+
+
+class LoggedRetry(Retry):
+    """Retry that writes one warning line per retry, so the Airflow task log
+    shows why a run was slow (429 rate limit vs. server errors)."""
+
+    def increment(self, method=None, url=None, response=None, error=None, *args, **kwargs):
+        reason = response.status if response is not None else repr(error)
+        log.warning("MCF retry: %s (reason: %s)", url, reason)
+        return super().increment(method, url, response, error, *args, **kwargs)
+
 
 def make_session() -> requests.Session:
     """A session that retries rate limits and server errors with backoff."""
     # The API rate-limits (429) part-way through a full run, so wait up to ~6 min
     # in total before giving up; a failed page means the whole run restarts.
-    retry = Retry(
+    # 400 is retried too: on 27 Oct the API returned a one-off 400 for a page that
+    # loaded fine moments later, and that single error restarted the whole run.
+    retry = LoggedRetry(
         total=8,
         backoff_factor=5,  # 5s, 10s, 20s, 40s, 80s, then capped at backoff_max
         backoff_max=120,
-        status_forcelist=[429, 500, 502, 503, 504],
+        status_forcelist=[400, 429, 500, 502, 503, 504],
         allowed_methods=["GET"],
     )
     session = requests.Session()

@@ -38,8 +38,15 @@ def test_parses_the_documented_json_paths(payload):
 def test_experience_88_years_is_capped_and_flagged(make_payload):
     row = parse_posting(make_payload(minimumYearsExperience=88))
     assert row["min_years_exp_raw"] == 88
-    assert row["min_years_exp"] == 40
+    assert row["min_years_exp"] == 30
     assert row["exp_out_of_range"] is True
+
+
+def test_experience_32_years_is_a_typing_error_like_the_metrics_say(make_payload):
+    """One cap for the clean layer and the metrics (review 4 Nov #13): 32 was unflagged under the old cap of 40."""
+    row = parse_posting(make_payload(minimumYearsExperience=32))
+    assert row["min_years_exp"] == 30 and row["exp_out_of_range"] is True
+    assert cap_experience(30) == (30, False)
 
 
 def test_experience_in_range_is_not_flagged(make_payload):

@@ -2,14 +2,14 @@
 
     python -m transform.refresh_marts
 
-Applies sql/init/03_dashboard_marts.sql, which drops and recreates the schema in one transaction, so a
+Applies sql/init/07_dashboard_marts.sql, which drops and recreates the schema in one transaction, so a
 rerun gives the same result and readers never see a half-built mart. The daily transform DAG calls
 rebuild_marts() as its last task.
 """
 import time
 from pathlib import Path
 
-MARTS_SQL = Path(__file__).resolve().parent.parent / "sql" / "init" / "03_dashboard_marts.sql"
+MARTS_SQL = Path(__file__).resolve().parent.parent / "sql" / "init" / "07_dashboard_marts.sql"
 MARTS = (
     "slice_day", "skill_slice_day", "occupation_day",
     "industry_slice_day",

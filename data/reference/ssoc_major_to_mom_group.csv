@@ -1,0 +1,10 @@
+ssoc_major_group,ssoc_major_title,split_a_group,split_b_group,note
+1,Managers,PMET,PME,
+2,Professionals,PMET,PME,
+3,Associate Professionals and Technicians,PMET,non_PME,
+4,Clerical Support Workers,clerical_sales_services,non_PME,
+5,Service and Sales Workers,clerical_sales_services,non_PME,
+6,Agricultural and Fishery Workers,production_transport,non_PME,assumption: MOM's group names do not mention agriculture or fishery; placed with production/transport/cleaners/labourers
+7,Craftsmen and Related Trades Workers,production_transport,non_PME,
+8,Plant and Machine Operators and Assemblers,production_transport,non_PME,
+9,"Cleaners, Labourers and Related Workers",production_transport,non_PME,

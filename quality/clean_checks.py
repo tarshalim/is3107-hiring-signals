@@ -94,7 +94,7 @@ CHECKS = [
           "==", 0, "views and applications are never negative"),
     Check("experience_out_of_range", "range", "warn",
           "SELECT count(*) " + _DAY_JOBS + " AND j.exp_out_of_range",
-          "<=", 0, "years of experience outside 0..40 (capped at 40 and flagged, e.g. the posting asking 88 years)"),
+          "<=", 0, "years of experience outside 0..30 (capped at 30 and flagged, e.g. the posting asking 88 years)"),
     Check("experience_out_of_range_share", "range", "fail",
           "SELECT avg(CASE WHEN j.exp_out_of_range THEN 1.0 ELSE 0.0 END) " + _DAY_JOBS,
           "<=", 0.01, "more than 1% out of range would mean the field changed meaning"),

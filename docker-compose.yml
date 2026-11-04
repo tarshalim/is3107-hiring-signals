@@ -9,6 +9,7 @@ x-airflow-env: &airflow-env
   AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Singapore
   AIRFLOW_CONN_WAREHOUSE: postgresql://${WAREHOUSE_USER}:${WAREHOUSE_PASSWORD}@warehouse:5432/${WAREHOUSE_DB}
   MCF_MAX_PAGES: ${MCF_MAX_PAGES:-0}
+  MCF_LIVE_PAGES: ${MCF_LIVE_PAGES:-3}   # near-real-time feed: pages of 100 newest postings per 30-min poll
   PYTHONPATH: /opt/airflow
   # The official image has no openpyxl (reference xlsx files) or rapidfuzz (skill matching). The image's
   # entrypoint pip-installs this list at container start. Without it the transform DAG's load_reference
@@ -20,6 +21,7 @@ x-airflow-volumes: &airflow-volumes
   - ./ingestion:/opt/airflow/ingestion
   - ./transform:/opt/airflow/transform
   - ./quality:/opt/airflow/quality
+  - ./metrics:/opt/airflow/metrics
   - ./sql:/opt/airflow/sql
   - ./data:/opt/airflow/data
   - ./logs:/opt/airflow/logs

@@ -83,7 +83,7 @@ change (the delta of a reposted posting is still measured against its previous s
 | Strings trimmed, inner whitespace collapsed | 85 titles a day have stray spaces, and a whitespace-only edit must not create a new version |
 | SSOC code kept as 5-digit TEXT | '01234' is a code, not a number, and a leading zero would vanish as an integer |
 | Salary to NUMERIC, missing to NULL | none missing so far, but the API allows it |
-| Years of experience outside 0..40: capped at 40, `exp_out_of_range = true`, raw value kept | one posting asks for 88 years and one for 50. Dropping them would hide the "unrealistic requirement" story, and capping without a flag would hide the error. The dashboard can exclude flagged rows |
+| Years of experience outside 0..30: capped at 30, `exp_out_of_range = true`, raw value kept (the cap was 40 until 4 Nov, when it was aligned with the metrics' 30) | postings ask for 32, 50 and 88 years. Dropping them would hide the "unrealistic requirement" story, and capping without a flag would hide the error. The dashboard can exclude flagged rows |
 | Dates to DATE, unreadable to NULL | counted by the dates_inconsistent check |
 | Position level: first level kept as `position_level`, all levels kept as `position_levels` | 31 postings have two levels |
 | MOM group derived from the SSOC first digit | lets the dashboard compare with MOM's three vacancy groups |

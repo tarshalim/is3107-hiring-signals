@@ -122,8 +122,8 @@ CREATE TABLE IF NOT EXISTS clean.dim_job (
     categories            TEXT,                        -- all categories, '|' separated
     education_code        TEXT,                        -- ssecEqa, 'NR' = not required
     min_years_exp_raw     SMALLINT,                    -- as the employer typed it (0 to 88 seen)
-    min_years_exp         SMALLINT,                    -- capped at 40 for analysis
-    exp_out_of_range      BOOLEAN NOT NULL DEFAULT FALSE, -- raw value outside 0..40, flagged not dropped
+    min_years_exp         SMALLINT,                    -- capped at 30 for analysis (40 before 4 Nov 2026)
+    exp_out_of_range      BOOLEAN NOT NULL DEFAULT FALSE, -- raw value outside 0..30, flagged not dropped
     salary_min            NUMERIC(12,2),
     salary_max            NUMERIC(12,2),
     salary_mid            NUMERIC(12,2) GENERATED ALWAYS AS ((salary_min + salary_max) / 2) STORED,

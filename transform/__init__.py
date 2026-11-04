@@ -8,5 +8,6 @@ Modules:
     load_reference     loads the SkillsFuture and SSOC files into clean.ref_* tables
     transform_snapshot loads one snapshot day end to end, idempotently
     run                command line entry point used outside Airflow
+    posting_history    weekly posting history rebuilt from posting dates (ext schema, docs/extra-data.md)
     db                 connection helper (reads .env, or WAREHOUSE_DSN)
 """

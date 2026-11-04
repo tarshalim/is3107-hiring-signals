@@ -104,7 +104,7 @@ def conn():
     admin.close()
     c = psycopg2.connect(_test_dsn())
     with c, c.cursor() as cur:
-        for f in ("01_raw_schema.sql", "02_clean_schema.sql", "04_salary_model.sql"):
+        for f in ("01_raw_schema.sql", "02_clean_schema.sql", "08_salary_model.sql"):
             cur.execute((REPO / "sql" / "init" / f).read_text(encoding="utf-8"))
         _seed(cur)
     yield c
@@ -149,7 +149,7 @@ def test_the_sql_file_applies_to_empty_tables_as_on_first_container_start():
     c = psycopg2.connect(f"{base}/is3107_marts_empty")
     try:
         with c, c.cursor() as cur:
-            for f in ("01_raw_schema.sql", "02_clean_schema.sql", "03_dashboard_marts.sql", "04_salary_model.sql"):
+            for f in ("01_raw_schema.sql", "02_clean_schema.sql", "07_dashboard_marts.sql", "08_salary_model.sql"):
                 cur.execute((REPO / "sql" / "init" / f).read_text(encoding="utf-8"))
     finally:
         c.close()

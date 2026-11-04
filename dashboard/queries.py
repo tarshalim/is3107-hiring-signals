@@ -1,6 +1,6 @@
 """All SQL the dashboard runs. Every function returns a DataFrame and is cached for an hour.
 
-The heavy lifting is already done by the `mart` schema (sql/init/03_dashboard_marts.sql); these queries
+The heavy lifting is already done by the `mart` schema (sql/init/07_dashboard_marts.sql); these queries
 only filter, window and rank those small tables. `Filters` is hashable, so it works as a cache key.
 """
 import streamlit as st

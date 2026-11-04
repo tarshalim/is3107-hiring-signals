@@ -2,7 +2,7 @@
 
     WAREHOUSE_TEST_DSN=postgresql://jobs:<pw>@localhost:5433/jobs pytest tests/test_integration_warehouse.py -v
 
-It creates a scratch database `is3107_test` on that server, applies sql/init/01 and 02 (which also
+It creates a scratch database `is3107_test` on that server, applies sql/init/01, 02 and 03 (which also
 proves the init scripts are idempotent), loads a 4-posting fixture for two days, runs the transform
 twice for the second day and checks: row counts, SCD2 versions, deltas and hours, rejected rows,
 data-quality verdicts, and that the rerun changed nothing. Docker-free runs of `pytest` skip it.
@@ -49,7 +49,8 @@ def conn():
     admin.close()
     c = psycopg2.connect(_test_dsn())
     with c, c.cursor() as cur:
-        for f in ("01_raw_schema.sql", "02_clean_schema.sql", "02_clean_schema.sql"):   # twice: idempotent
+        for f in ("01_raw_schema.sql", "02_clean_schema.sql", "02_clean_schema.sql",   # twice: idempotent
+                  "03_mom_vacancies.sql", "03_mom_vacancies.sql"):
             cur.execute((REPO / "sql" / "init" / f).read_text(encoding="utf-8"))
     load_reference(c, REPO / "data" / "reference")
     yield c
@@ -107,7 +108,7 @@ def test_two_days_then_rerun(conn, make_payload):
     assert s1["versions_inserted"] == 3 and s1["fact_rows_with_previous"] == 0
     assert _count(conn, "SELECT count(*) FROM clean.dim_skill") == 3          # Nursing, Perform Ecg, Team Player
     assert _count(conn, "SELECT count(*) FROM clean.bridge_job_skill") == 9
-    assert _count(conn, "SELECT min_years_exp FROM clean.dim_job WHERE job_uuid = %s", "b" * 32) == 40
+    assert _count(conn, "SELECT min_years_exp FROM clean.dim_job WHERE job_uuid = %s", "b" * 32) == 30
     assert _count(conn, "SELECT count(*) FROM clean.dim_job WHERE exp_out_of_range") == 1
     assert _count(conn, "SELECT match_method FROM clean.dim_skill WHERE mcf_skill_name = 'Team Player'") == "alias"
 

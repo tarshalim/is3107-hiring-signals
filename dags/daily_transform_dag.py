@@ -14,13 +14,16 @@ Design, following L7:
     so Airflow runs them in parallel (the lecturer's "separate blocks" point).
   - idempotent: transform_snapshot is delete-then-insert per snapshot_date plus ON CONFLICT upserts
     (transform/transform_snapshot.py), so a retry or a manual rerun gives the same tables.
-  - retries with a delay for temporary errors (database restarting), and a sensor timeout for the
-    permanent case (the raw day never arrives) so the run fails clearly instead of hanging.
-  - time zone: the snapshot is labelled with the Singapore date, like the ingest DAG, never with
-    Airflow's UTC-based `ds` (which is the start of the data interval and would be a day behind).
+  - retries with a delay for temporary errors (database restarting), and a sensor timeout at about
+    20:00 SGT for the permanent case (the raw day never arrives) so the run fails clearly instead of
+    hanging. A sensor timeout is not retried.
+  - which day: the Singapore date of the run's data_interval_end (transform/run_context.py), never
+    Airflow's UTC-based `ds` (the start of the data interval, a day behind) and never the wall clock:
+    clearing an old run must reload that run's day, not today's. (The ingest DAG does use the wall
+    clock, on purpose: the API only serves today's postings, so a past day cannot be re-fetched.)
   - catchup=False: a past day whose raw snapshot was never collected cannot be fetched later, so
-    backfilling makes no sense. An old day that IS in raw can be reloaded by triggering the DAG
-    with {"snapshot_date": "2026-10-24"} in the run config.
+    backfilling makes no sense. An old day that IS in raw can be reloaded by clearing its run, or by
+    triggering the DAG with {"snapshot_date": "2026-10-24"} in the run config.
 
 Why a sensor on the warehouse and not a Dataset/Asset dependency on the ingest DAG:
   1. The contract is "the day's rows are in raw.ingest_runs", whoever put them there: the ingest DAG,
@@ -51,12 +54,15 @@ except ImportError:  # Airflow 2
 from quality.clean_checks import failed_checks, run_checks, summarise
 from transform.load_reference import load_reference
 from transform.refresh_marts import rebuild_marts
+from transform.run_context import run_timings, snapshot_date_for_run
 from transform.skill_mapping import match_rate_report
 from transform.transform_snapshot import transform_snapshot, write_run_summary
 
 SGT = "Asia/Singapore"
 POKE_INTERVAL = 5 * 60          # check for the raw day every 5 minutes
-SENSOR_TIMEOUT = 3 * 60 * 60    # give up after 3 hours: ingest has 3 retries of 10 min plus a 24 min run
+# Give up at about 20:00 SGT (9.5 hours after the 10:30 start). Ingest normally ends by 10:45, but on
+# 27 and 28 Oct it ran until 14:49 and 15:31, and the old 3 hour timeout (13:30) missed both days.
+SENSOR_TIMEOUT = int(9.5 * 60 * 60)
 
 
 def _warehouse_conn():
@@ -64,12 +70,10 @@ def _warehouse_conn():
 
 
 def _snapshot_date_from_context() -> str:
-    """Run config {"snapshot_date": "YYYY-MM-DD"} wins; otherwise today in Singapore time."""
+    """Run config {"snapshot_date": "YYYY-MM-DD"} wins; otherwise the Singapore date of data_interval_end."""
     ctx = get_current_context()
     override = (ctx.get("params") or {}).get("snapshot_date")
-    if override:
-        return str(override)
-    return pendulum.now(SGT).to_date_string()
+    return snapshot_date_for_run(override, ctx["data_interval_end"])
 
 
 @dag(
@@ -169,14 +173,19 @@ def daily_mcf_transform():
 
     @task
     def log_run_stats(snapshot_date: str, stats: dict, dq_summary: dict) -> dict:
-        """One 'dag_run' row in clean.load_log plus the skill match rate, for the performance section."""
+        """One 'dag_run' row in clean.load_log plus the skill match rate, for the performance section.
+        seconds = the transform's own run time; the sensor wait and wall time go in details (run_context.py)."""
         ctx = get_current_context()
+        dag_run = ctx["dag_run"]
+        sensor = dag_run.get_task_instance("wait_for_raw")
+        times = run_timings(stats["elapsed_seconds"], dag_run.start_date, sensor.end_date if sensor else None,
+                            pendulum.now("UTC"))
         conn = _warehouse_conn()
         try:
             rates = match_rate_report(conn, snapshot_date)
-            started = ctx["dag_run"].start_date
-            seconds = (pendulum.now("UTC") - started).total_seconds() if started else stats.get("elapsed_seconds", 0)
-            write_run_summary(conn, ctx["run_id"], snapshot_date, {**stats, "skill_match": rates}, dq_summary, seconds)
+            details = {**stats, "skill_match": rates, "sensor_wait_seconds": times["sensor_wait_seconds"],
+                       "run_wall_seconds": times["run_wall_seconds"]}
+            write_run_summary(conn, ctx["run_id"], snapshot_date, details, dq_summary, times["seconds"])
         finally:
             conn.close()
         print(json.dumps({"snapshot_date": snapshot_date, "dq": dq_summary, "skill_match": rates}, default=str))
