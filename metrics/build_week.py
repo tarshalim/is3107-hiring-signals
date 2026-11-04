@@ -49,6 +49,9 @@ THRESHOLDS = {
     "min_companies": 10,             # employers behind a barrier skill, or behind a skill's shortage postings
                                      # (on 25 Oct "Aircraft Systems" had 40 shortage postings from ONE employer;
                                      # on 3 Nov, with 5, Metal Fabrication's 57 shortage postings came from 5 firms)
+    "max_top_company_share": 0.5,    # a barrier or shortage skill is not flagged when its single biggest employer
+                                     # posts more than half of its flagged postings (10 employers can still be
+                                     # one bulk poster plus nine with a posting each)
     # usable monthly salary: below 300 are hourly or daily rates typed into the monthly field (for example $12 to
     # $24 "per month" for a packing job, 1,395 postings below 300 on 25 Oct) and placeholders like $1, above
     # 100,000 are annual figures
@@ -221,11 +224,27 @@ def _build_posting_week(cur, p) -> dict:
 # ---------------------------------------------------------------------------------------------
 # Signal 1: barrier skills
 # ---------------------------------------------------------------------------------------------
+def _top_company(flag: str) -> str:
+    """CTE top_company: per skill, how many of its flagged postings (flag = a posting_week column) come from its
+    single biggest employer. Divided by the skill's flagged postings it gives top_company_share: above
+    THRESHOLDS["max_top_company_share"] one bulk poster, not the market, makes the signal."""
+    return f"""
+    top_company AS (
+        SELECT skill_ref, max(n) AS top_n
+        FROM (SELECT ps.skill_ref, pw.company_name, count(*) AS n
+              FROM pool_skill ps
+              JOIN metrics.posting_week pw ON pw.week_end_date = %(e)s AND pw.job_uuid = ps.job_uuid
+              WHERE pw.{flag}
+              GROUP BY ps.skill_ref, pw.company_name) per_company
+        GROUP BY skill_ref
+    )"""
+
+
 BARRIER_SQL = f"""
 INSERT INTO metrics.barrier_skill (week_end_date, snapshot_date, skill_ref, skill_name, is_mapped, is_casl,
-    postings, companies, barrier_postings, barrier_companies, barrier_share, expected_share, lift,
+    postings, companies, barrier_postings, barrier_companies, top_company_share, barrier_share, expected_share, lift,
     views, applications, apply_rate, overall_apply_rate, rate_vs_overall, is_barrier)
-WITH {_POOL_SKILL}, {_SKILL_NAMES},
+WITH {_POOL_SKILL}, {_SKILL_NAMES}, {_top_company("is_barrier_posting")},
 group_share AS (
     -- share of barrier postings in each SSOC major group: what a posting of that group shows on average
     SELECT ssoc_major_group, avg(CASE WHEN is_barrier_posting THEN 1.0 ELSE 0.0 END) AS share
@@ -252,16 +271,19 @@ per_skill AS (
 rated AS (
     SELECT p.*, p.barrier_postings::numeric / p.postings AS share,
            p.barrier_postings::numeric / p.postings / NULLIF(p.expected_share, 0) AS lift,
-           p.applications::numeric / NULLIF(p.views, 0) AS rate
+           p.applications::numeric / NULLIF(p.views, 0) AS rate,
+           t.top_n::numeric / NULLIF(p.barrier_postings, 0) AS top_share     -- NULL: no barrier postings
     FROM per_skill p
+    LEFT JOIN top_company t ON t.skill_ref = p.skill_ref
 )
 SELECT %(e)s, %(s)s, r.skill_ref, n.skill_name, n.is_mapped, n.is_casl,
-       r.postings, r.companies, r.barrier_postings, r.barrier_companies,
+       r.postings, r.companies, r.barrier_postings, r.barrier_companies, round(r.top_share, 4),
        round(r.share, 4), round(r.expected_share, 4), round(r.lift, 3),
        r.views, r.applications, round(r.rate, 5), round(o.apply_rate, 5),
        round(r.rate / NULLIF(o.apply_rate, 0), 3),
        COALESCE(r.lift >= %(barrier_min_lift)s AND r.barrier_postings >= %(barrier_min_flagged)s
-                AND r.barrier_companies >= %(min_companies)s, FALSE)
+                AND r.barrier_companies >= %(min_companies)s
+                AND r.top_share <= %(max_top_company_share)s, FALSE)
 FROM rated r
 CROSS JOIN overall o
 JOIN skill_names n ON n.skill_ref = r.skill_ref
@@ -272,9 +294,9 @@ JOIN skill_names n ON n.skill_ref = r.skill_ref
 # ---------------------------------------------------------------------------------------------
 SHORTAGE_SQL = f"""
 INSERT INTO metrics.shortage_skill (week_end_date, snapshot_date, skill_ref, skill_name, is_mapped, is_casl,
-    postings, shortage_postings, shortage_companies, shortage_share, overall_shortage_share, lift,
+    postings, shortage_postings, shortage_companies, top_company_share, shortage_share, overall_shortage_share, lift,
     median_repost_count, median_applications)
-WITH {_POOL_SKILL}, {_SKILL_NAMES},
+WITH {_POOL_SKILL}, {_SKILL_NAMES}, {_top_company("is_shortage")},
 overall AS (
     SELECT count(*) FILTER (WHERE is_shortage)::numeric / NULLIF(count(*), 0) AS share
     FROM metrics.posting_week WHERE week_end_date = %(e)s
@@ -295,13 +317,17 @@ per_skill AS (
 )
 SELECT %(e)s, %(s)s, p.skill_ref, n.skill_name, n.is_mapped, n.is_casl,
        p.postings, p.shortage_postings, p.shortage_companies,
+       round(t.top_n::numeric / p.shortage_postings, 4),
        round(p.shortage_postings::numeric / p.postings, 4),
        round(o.share, 4),
        round((p.shortage_postings::numeric / p.postings) / NULLIF(o.share, 0), 3),
        round(p.median_reposts::numeric, 1), round(p.median_apps::numeric, 1)
 FROM per_skill p
+JOIN top_company t ON t.skill_ref = p.skill_ref
 CROSS JOIN overall o
 JOIN skill_names n ON n.skill_ref = p.skill_ref
+-- a skill is listed (flagged) only if no single employer posts more than max_top_company_share of its shortage postings
+WHERE t.top_n::numeric / p.shortage_postings <= %(max_top_company_share)s
 """
 
 # ---------------------------------------------------------------------------------------------
@@ -577,13 +603,14 @@ METRIC_CHECKS = [
       for t in ("barrier_skill", "shortage_skill", "skill_demand", "skill_salary", "unrealistic_requirements")],
     Check("shares_outside_0_1", "range", "fail",
           """SELECT (SELECT count(*) FROM metrics.shortage_skill WHERE week_end_date = %(e)s
-                       AND (shortage_share NOT BETWEEN 0 AND 1 OR lift < 0))
+                       AND (shortage_share NOT BETWEEN 0 AND 1 OR lift < 0 OR top_company_share NOT BETWEEN 0 AND 1))
                   + (SELECT count(*) FROM metrics.unrealistic_requirements WHERE week_end_date = %(e)s
                        AND (flagged_share NOT BETWEEN 0 AND 1 OR flagged_postings > base_postings))
                   + (SELECT count(*) FROM metrics.skill_demand WHERE week_end_date = %(e)s
                        AND share_of_week NOT BETWEEN 0 AND 1)
                   + (SELECT count(*) FROM metrics.barrier_skill WHERE week_end_date = %(e)s
-                       AND (barrier_share NOT BETWEEN 0 AND 1 OR lift < 0 OR barrier_postings > postings))""",
+                       AND (barrier_share NOT BETWEEN 0 AND 1 OR lift < 0 OR barrier_postings > postings
+                            OR top_company_share NOT BETWEEN 0 AND 1))""",
           "==", 0, "every share is between 0 and 1 and no group has more flagged than base postings"),
     Check("negative_rates", "range", "fail",
           """SELECT (SELECT count(*) FROM metrics.competitiveness WHERE week_end_date = %(e)s

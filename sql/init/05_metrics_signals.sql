@@ -120,6 +120,8 @@ CREATE TABLE IF NOT EXISTS metrics.barrier_skill (
     companies           INTEGER NOT NULL,           -- distinct employers among them (at least thresholds.min_companies)
     barrier_postings    INTEGER NOT NULL,           -- of those, posting_week.is_barrier_posting
     barrier_companies   INTEGER NOT NULL,           -- employers behind the barrier postings
+    top_company_share   NUMERIC(6,4),               -- share of the barrier postings from the single biggest employer
+                                                    -- (above thresholds.max_top_company_share: not flagged; NULL: none)
     barrier_share       NUMERIC(8,4),               -- barrier_postings / postings
     expected_share      NUMERIC(8,4),               -- the share if each posting behaved like its SSOC major group's average
     lift                NUMERIC(10,3),              -- barrier_share / expected_share. 2 = twice as common as its occupations predict
@@ -129,7 +131,8 @@ CREATE TABLE IF NOT EXISTS metrics.barrier_skill (
     overall_apply_rate  NUMERIC(10,5),              -- applications / views over all open postings
     rate_vs_overall     NUMERIC(10,3),              -- apply_rate / overall_apply_rate. 0.6 = 40% fewer applications per view
     is_barrier          BOOLEAN NOT NULL,           -- lift >= thresholds.barrier_min_lift, with barrier_min_flagged barrier
-                                                    -- postings from min_companies employers
+                                                    -- postings from min_companies employers, no one employer above
+                                                    -- max_top_company_share of them
     PRIMARY KEY (week_end_date, skill_ref)
 );
 
@@ -144,6 +147,8 @@ CREATE TABLE IF NOT EXISTS metrics.shortage_skill (
     postings               INTEGER NOT NULL,
     shortage_postings      INTEGER NOT NULL,        -- of those, posting_week.is_shortage
     shortage_companies     INTEGER NOT NULL,        -- employers behind the shortage postings (at least thresholds.min_companies)
+    top_company_share      NUMERIC(6,4),            -- share of the shortage postings from the single biggest employer
+                                                    -- (a skill above thresholds.max_top_company_share is not listed)
     shortage_share         NUMERIC(8,4),            -- shortage_postings / postings
     overall_shortage_share NUMERIC(8,4),            -- the same over all open postings
     lift                   NUMERIC(10,3),           -- shortage_share / overall_shortage_share. 2 = twice as common as usual
@@ -240,7 +245,7 @@ CREATE TABLE IF NOT EXISTS metrics.skill_salary (
 -- compare_mcf_with_mom task of the same DAG run from the same snapshot.
 
 -- ---------------------------------------------------------------------------------------------
--- Upgrade of a warehouse created before 4 Nov 2026 (review fixes #6 and #9). CREATE TABLE IF NOT
+-- Upgrade of a warehouse created before 4 Nov 2026 (review fixes #6, #9, top_company_share). CREATE TABLE IF NOT
 -- EXISTS above leaves an existing table as it is, so the new columns are added here. Every statement
 -- is idempotent, and on a new warehouse they change nothing. Rows of old weeks get FALSE / NULL in the
 -- new columns until those weeks are rerun (clear their weekly_metrics runs).
@@ -264,3 +269,6 @@ ALTER TABLE metrics.barrier_skill ADD COLUMN IF NOT EXISTS expected_share NUMERI
 ALTER TABLE metrics.barrier_skill ADD COLUMN IF NOT EXISTS lift           NUMERIC(10,3);
 ALTER TABLE metrics.barrier_skill DROP COLUMN IF EXISTS views_per_posting;   -- raw views per posting: favoured old postings
 ALTER TABLE metrics.barrier_skill DROP COLUMN IF EXISTS views_vs_overall;
+-- one bulk employer cannot make a barrier or shortage skill (thresholds.max_top_company_share)
+ALTER TABLE metrics.barrier_skill  ADD COLUMN IF NOT EXISTS top_company_share NUMERIC(6,4);
+ALTER TABLE metrics.shortage_skill ADD COLUMN IF NOT EXISTS top_company_share NUMERIC(6,4);

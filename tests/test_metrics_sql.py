@@ -142,6 +142,23 @@ def test_barrier_uses_views_per_day_within_the_ssoc_group_and_a_lift():
             t["barrier_min_flagged"]) == (0.75, 0.8, 1.5, 25)
 
 
+def test_one_bulk_employer_cannot_make_a_barrier_or_shortage_skill():
+    """top_company_share = the skill's flagged postings from its biggest employer / its flagged postings.
+    Above THRESHOLDS["max_top_company_share"] (0.5) the skill is not flagged: is_barrier is false, and the skill
+    is left out of shortage_skill (which lists flagged skills only)."""
+    assert THRESHOLDS["max_top_company_share"] == 0.5
+    barrier = " ".join(build_week.BARRIER_SQL.split())
+    shortage = " ".join(build_week.SHORTAGE_SQL.split())
+    assert "WHERE pw.is_barrier_posting GROUP BY ps.skill_ref, pw.company_name" in barrier
+    assert "AND r.top_share <= %(max_top_company_share)s, FALSE)" in barrier
+    assert "WHERE pw.is_shortage GROUP BY ps.skill_ref, pw.company_name" in shortage
+    assert shortage.endswith("WHERE t.top_n::numeric / p.shortage_postings <= %(max_top_company_share)s")
+    blocks = _table_blocks(SCHEMA)
+    assert "top_company_share" in blocks["barrier_skill"] and "top_company_share" in blocks["shortage_skill"]
+    for table in ("barrier_skill ", "shortage_skill"):      # the upgrade block adds it to an existing warehouse
+        assert f"ALTER TABLE metrics.{table} ADD COLUMN IF NOT EXISTS top_company_share" in SCHEMA
+
+
 def test_shortage_medians_describe_the_shortage_postings():
     """Review 4 Nov #8: over all postings with the skill, every top skill showed 0.0."""
     sql = " ".join(build_week.SHORTAGE_SQL.split())

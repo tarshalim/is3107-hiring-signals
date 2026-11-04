@@ -43,8 +43,10 @@ FETCHED = {D1: datetime(2026, 10, 24, 9, 35, tzinfo=timezone.utc),    # 17:35 SG
            D2: datetime(2026, 10, 25, 2, 23, tzinfo=timezone.utc),    # 16.8 hours later
            D3: datetime(2026, 10, 26, 2, 23, tzinfo=timezone.utc)}    # 24 hours later
 # a 7-posting fixture cannot meet the real minimum sample sizes
+# (every fixture posting is from the same employer, so the one-employer cap is lifted here and tested at the end)
 SMALL = {"skill_min_postings": 1, "group_min_postings": 1, "salary_min_postings": 1,
-         "demand_min_postings": 1, "shortage_min_flagged": 1, "barrier_min_flagged": 1, "min_companies": 1}
+         "demand_min_postings": 1, "shortage_min_flagged": 1, "barrier_min_flagged": 1, "min_companies": 1,
+         "max_top_company_share": 1.0}
 METRIC_TABLES = ("posting_week", *SIGNAL_TABLES)
 
 
@@ -175,16 +177,19 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
     # barrier skills: group 2 has 1 barrier posting in 5 (0.2). "Pack goods" is only on g: share 1.0 against an
     # expected 0.2, lift 5. Skills on all five group-2 postings (Collaboration, Nursing) show exactly the
     # expected 0.2, lift 1: the occupation alone does not make them barriers.
-    barrier = _all(conn, """SELECT postings, barrier_postings, barrier_share, expected_share, lift FROM metrics.barrier_skill
-                            WHERE week_end_date = %s AND is_barrier""", D3)
-    assert barrier == [(1, 1, Decimal("1.0000"), Decimal("0.2000"), Decimal("5.000"))]
+    barrier = _all(conn, """SELECT postings, barrier_postings, barrier_share, expected_share, lift, top_company_share
+                            FROM metrics.barrier_skill WHERE week_end_date = %s AND is_barrier""", D3)
+    assert barrier == [(1, 1, Decimal("1.0000"), Decimal("0.2000"), Decimal("5.000"), Decimal("1.0000"))]
+    # a skill with no barrier posting has no biggest employer
+    assert _one(conn, """SELECT barrier_postings, top_company_share FROM metrics.barrier_skill
+                         WHERE week_end_date = %s AND skill_name = 'Forklift Operation'""", D3) == (0, None)
     assert _one(conn, """SELECT barrier_share, lift FROM metrics.barrier_skill
                          WHERE week_end_date = %s AND skill_name = 'Collaboration'""", D3) \
         == (Decimal("0.2000"), Decimal("1.000"))
     # shortage: c is the only flagged posting (1 of 6), so its skill has lift 6
-    assert _all(conn, """SELECT shortage_postings, lift, median_repost_count, median_applications
+    assert _all(conn, """SELECT shortage_postings, lift, median_repost_count, median_applications, top_company_share
                          FROM metrics.shortage_skill WHERE week_end_date = %s""", D3) \
-        == [(1, Decimal("6.000"), Decimal("2.0"), Decimal("1.0"))]           # medians of c, the shortage posting
+        == [(1, Decimal("6.000"), Decimal("2.0"), Decimal("1.0"), Decimal("1.0000"))]   # medians of c, the shortage posting
     unreal = {r[0]: r[1:] for r in _all(conn, """SELECT flag, base_postings, flagged_postings, flagged_share, rule
                  FROM metrics.unrealistic_requirements WHERE week_end_date = %s AND group_type = 'overall'""", D3)}
     assert unreal["reposted_many_apps"][:3] == (6, 1, Decimal("0.1667"))
@@ -269,3 +274,15 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
     assert _week_rows(conn, D3) == before_d3
     assert _week_rows(conn, D2) == before_d2
     assert _one(conn, "SELECT count(*) FROM metrics.run_log") == (3,)
+
+    # ---- one bulk employer: with the real cap of 0.5, a skill whose flagged postings all come from one employer
+    # is not flagged. Pack goods stays in barrier_skill (top_company_share 1.0) but is_barrier turns false; the
+    # Forklift shortage skill is left out of shortage_skill ---------------------------------------------------
+    run_week(conn, D3 - timedelta(days=7), D3, run_id="test-w3-one-employer",
+             thresholds={**SMALL, "max_top_company_share": 0.5})
+    assert _all(conn, "SELECT skill_name FROM metrics.barrier_skill WHERE week_end_date = %s AND is_barrier", D3) == []
+    assert _one(conn, """SELECT top_company_share, lift FROM metrics.barrier_skill
+                         WHERE week_end_date = %s AND skill_name = 'Pack goods'""", D3) == (Decimal("1.0000"), Decimal("5.000"))
+    assert _all(conn, "SELECT skill_name FROM metrics.shortage_skill WHERE week_end_date = %s", D3) == []
+    assert _one(conn, "SELECT thresholds->>'max_top_company_share' FROM metrics.run_log WHERE week_end_date = %s",
+                D3) == ("0.5",)
