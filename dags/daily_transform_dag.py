@@ -53,7 +53,7 @@ except ImportError:  # Airflow 2
 
 from quality.clean_checks import failed_checks, run_checks, summarise
 from transform.load_reference import load_reference
-from transform.run_context import snapshot_date_for_run
+from transform.run_context import run_timings, snapshot_date_for_run
 from transform.skill_mapping import match_rate_report
 from transform.transform_snapshot import transform_snapshot, write_run_summary
 
@@ -146,14 +146,19 @@ def daily_mcf_transform():
 
     @task
     def log_run_stats(snapshot_date: str, stats: dict, dq_summary: dict) -> dict:
-        """One 'dag_run' row in clean.load_log plus the skill match rate, for the performance section."""
+        """One 'dag_run' row in clean.load_log plus the skill match rate, for the performance section.
+        seconds = the transform's own run time; the sensor wait and wall time go in details (run_context.py)."""
         ctx = get_current_context()
+        dag_run = ctx["dag_run"]
+        sensor = dag_run.get_task_instance("wait_for_raw")
+        times = run_timings(stats["elapsed_seconds"], dag_run.start_date, sensor.end_date if sensor else None,
+                            pendulum.now("UTC"))
         conn = _warehouse_conn()
         try:
             rates = match_rate_report(conn, snapshot_date)
-            started = ctx["dag_run"].start_date
-            seconds = (pendulum.now("UTC") - started).total_seconds() if started else stats.get("elapsed_seconds", 0)
-            write_run_summary(conn, ctx["run_id"], snapshot_date, {**stats, "skill_match": rates}, dq_summary, seconds)
+            details = {**stats, "skill_match": rates, "sensor_wait_seconds": times["sensor_wait_seconds"],
+                       "run_wall_seconds": times["run_wall_seconds"]}
+            write_run_summary(conn, ctx["run_id"], snapshot_date, details, dq_summary, times["seconds"])
         finally:
             conn.close()
         print(json.dumps({"snapshot_date": snapshot_date, "dq": dq_summary, "skill_match": rates}, default=str))

@@ -81,6 +81,13 @@ def test_snapshot_date_comes_from_the_run_not_the_wall_clock():
     assert "now(" not in body
 
 
+def test_logged_run_seconds_are_the_transforms_own_time():
+    src = DAG_FILE.read_text(encoding="utf-8")
+    fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "log_run_stats")
+    body = ast.unparse(fn)
+    assert "run_timings(stats['elapsed_seconds']" in body and "sensor_wait_seconds" in body
+
+
 def _module_level_imports(path):
     """Names imported at the top level of a module (not inside a function)."""
     names = set()
