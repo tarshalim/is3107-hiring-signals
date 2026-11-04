@@ -118,6 +118,13 @@ def test_no_signal_threshold_is_hard_coded_in_the_sql():
     assert not re.search(r"applications_total\s*<=\s*\d", src)
 
 
+def test_shortage_medians_describe_the_shortage_postings():
+    """Review 4 Nov #8: over all postings with the skill, every top skill showed 0.0."""
+    sql = " ".join(build_week.SHORTAGE_SQL.split())
+    assert "(ORDER BY pw.repost_count) FILTER (WHERE pw.is_shortage)" in sql
+    assert "(ORDER BY pw.applications_total) FILTER (WHERE pw.is_shortage)" in sql
+
+
 def test_ext_views_use_the_same_usable_salary_rule_as_the_metrics():
     ext = (SQL_DIR / "04_ext_schema.sql").read_text(encoding="utf-8")
     floor, ceiling = THRESHOLDS["salary_floor"], THRESHOLDS["salary_ceiling"]

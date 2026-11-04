@@ -137,8 +137,8 @@ CREATE TABLE IF NOT EXISTS metrics.shortage_skill (
     shortage_share         NUMERIC(8,4),            -- shortage_postings / postings
     overall_shortage_share NUMERIC(8,4),            -- the same over all open postings
     lift                   NUMERIC(10,3),           -- shortage_share / overall_shortage_share. 2 = twice as common as usual
-    median_repost_count    NUMERIC(8,1),
-    median_applications    NUMERIC(10,1),
+    median_repost_count    NUMERIC(8,1),            -- over the skill's shortage postings only
+    median_applications    NUMERIC(10,1),           -- over the skill's shortage postings only
     PRIMARY KEY (week_end_date, skill_ref)
 );
 

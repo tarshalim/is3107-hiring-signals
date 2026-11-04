@@ -229,8 +229,9 @@ per_skill AS (
     SELECT ps.skill_ref, count(*) AS postings,
            count(*) FILTER (WHERE pw.is_shortage)                         AS shortage_postings,
            count(DISTINCT pw.company_name) FILTER (WHERE pw.is_shortage)  AS shortage_companies,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY pw.repost_count)       AS median_reposts,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY pw.applications_total) AS median_apps
+           -- medians of the skill's SHORTAGE postings (over all its postings they were 0.0 for every top skill)
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY pw.repost_count) FILTER (WHERE pw.is_shortage)       AS median_reposts,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY pw.applications_total) FILTER (WHERE pw.is_shortage) AS median_apps
     FROM pool_skill ps
     JOIN metrics.posting_week pw ON pw.week_end_date = %(e)s AND pw.job_uuid = ps.job_uuid
     GROUP BY ps.skill_ref

@@ -162,8 +162,9 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
     barrier = _all(conn, "SELECT skill_name, rate_vs_overall FROM metrics.barrier_skill WHERE week_end_date = %s AND is_barrier", D3)
     assert len(barrier) == 1 and "Forklift" in barrier[0][0] and barrier[0][1] < Decimal("0.1")
     # shortage: c is the only flagged posting (1 of 6), so its skill has lift 6
-    assert _all(conn, "SELECT shortage_postings, lift FROM metrics.shortage_skill WHERE week_end_date = %s", D3) \
-        == [(1, Decimal("6.000"))]
+    assert _all(conn, """SELECT shortage_postings, lift, median_repost_count, median_applications
+                         FROM metrics.shortage_skill WHERE week_end_date = %s""", D3) \
+        == [(1, Decimal("6.000"), Decimal("2.0"), Decimal("1.0"))]           # medians of c, the shortage posting
     unreal = {r[0]: r[1:] for r in _all(conn, """SELECT flag, base_postings, flagged_postings, flagged_share, rule
                  FROM metrics.unrealistic_requirements WHERE week_end_date = %s AND group_type = 'overall'""", D3)}
     assert unreal["reposted_many_apps"][:3] == (6, 1, Decimal("0.1667")) and "320 or more" in unreal["reposted_many_apps"][3]
