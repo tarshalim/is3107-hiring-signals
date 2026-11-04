@@ -1,13 +1,14 @@
 """Weekly dashboard metrics: the MOM comparison and the hiring signals, one week per run.
 
-refresh_mom_stats -> compare_mcf_with_mom
-
-                                                                   +-> build_barrier_skill -------------+
-                                                                   +-> build_shortage_skill ------------+
-wait_for_week_end_snapshot -> pick_snapshot -> build_posting_week -+-> build_unrealistic_requirements --+-> check_and_log
-                                                                   +-> build_competitiveness -----------+
-                                                                   +-> build_skill_demand --------------+
-                                                                   +-> build_skill_salary --------------+
+                            refresh_mom_stats --+-> compare_mcf_with_mom
+                                                |
+wait_for_week_end_snapshot -> pick_snapshot ----+
+                                                |                    +-> build_barrier_skill -------------+
+                                                |                    +-> build_shortage_skill ------------+
+                                                +-> build_posting_week -+-> build_unrealistic_requirements --+-> check_and_log
+                                                                     +-> build_competitiveness -----------+
+                                                                     +-> build_skill_demand --------------+
+                                                                     +-> build_skill_salary --------------+
 
 Runs every Tuesday at 14:00 Singapore time. Ingest (10:00) normally finishes by 10:45 and the transform
 soon after, but on 27 and 28 Oct ingest ran until 14:49 and 15:31. So wait_for_week_end_snapshot first
@@ -17,10 +18,11 @@ skipped (soft_fail) and pick_snapshot still runs (trigger_rule none_failed) with
 run_log and the snapshot_is_week_end check record. Nothing ever reads a half-loaded day, because the
 transform loads each day in one transaction.
 
-The two branches are independent: the MOM comparison writes metrics.mcf_vs_mom_share
-(sql/init/03_mom_vacancies.sql), the signal tasks write the tables of sql/init/05_metrics_signals.sql
-(docs/weekly-metrics.md). A failed MOM download does not stop the signals, and the other way round, but
-either failure fails the run. Both read the same week and the same snapshot, so their numbers line up.
+The MOM comparison writes metrics.mcf_vs_mom_share (sql/init/03_mom_vacancies.sql), the signal tasks write
+the tables of sql/init/05_metrics_signals.sql (docs/weekly-metrics.md). compare_mcf_with_mom takes
+pick_snapshot's week and snapshot, so both always use the same day (two separate "latest day" lookups could
+differ if the transform committed a day in between). A failed MOM download does not stop the signals, but
+it fails the run.
 
 Why weekly and not daily: MOM publishes one new quarter every three months, and occupation shares in a
 ~90k-posting snapshot move very little from one day to the next. Weekly gives one history point per week
@@ -33,8 +35,8 @@ Design:
     is enough, so a missed day changes nothing.
   - catchup=True from 20 Oct: our first snapshot is 24 Oct, so the first run is the week ending Tue
     27 Oct and Airflow backfills one run per week since then. max_active_runs=1 runs them in order.
-    Every MCF-reading task (compare_mcf_with_mom, pick_snapshot) takes the week from the run's data
-    interval in the same way, or all backfilled runs would compute the same thing.
+    pick_snapshot takes the week from the run's data interval (every other MCF-reading task takes it from
+    pick_snapshot), or all backfilled runs would compute the same thing.
   - MOM: refresh_mom_stats downloads the whole MOM series (about 450 rows, a few seconds) every run
     instead of checking for a new quarter: simpler, and MOM sometimes revises past quarters. Every run,
     backfilled ones included, compares with the latest MOM quarter available.
@@ -52,7 +54,7 @@ Design:
     the contract is "Tuesday is in clean", whoever loaded it. Backfilled or cleared old weeks pass at once.
 """
 import json
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pendulum
 from airflow.decorators import dag, task
@@ -100,16 +102,15 @@ def weekly_metrics():
         return stats
 
     @task
-    def compare_mcf_with_mom(mom_stats: dict, data_interval_start=None, data_interval_end=None) -> dict:
-        """MCF share of postings vs MOM share of vacancies, per occupation group, for this run's week.
-        Airflow fills in data_interval_start/end from the run."""
-        after, up_to = snapshot_week.week_bounds(data_interval_start, data_interval_end)
+    def compare_mcf_with_mom(mom_stats: dict, week: dict) -> dict:
+        """MCF share of postings vs MOM share of vacancies, per occupation group, for pick_snapshot's week
+        and snapshot: the comparison and the signals never look up "the latest day" separately."""
+        after = date.fromisoformat(week["week_start_date"]) - timedelta(days=1)
+        up_to = date.fromisoformat(week["week_end_date"])
         conn = _warehouse_conn()
         try:
-            stats = mom_vacancies.build_comparison(conn, after, up_to)
-        except snapshot_week.NoSnapshotInWeek as e:
-            # Fail without retries: waiting will not create a snapshot for a past week.
-            raise AirflowFailException(str(e)) from e
+            stats = mom_vacancies.build_comparison(conn, after, up_to,
+                                                   snapshot_date=date.fromisoformat(week["snapshot_date"]))
         finally:
             conn.close()
         print(json.dumps(stats, default=str))
@@ -180,10 +181,9 @@ def weekly_metrics():
             raise AirflowFailException(f"Metrics checks failed for week ending {week['week_end_date']}: {summary['failed']}")
         return summary
 
-    compare_mcf_with_mom(refresh_mom_stats())
-
     week = pick_snapshot()
     wait_for_week_end_snapshot() >> week
+    compare_mcf_with_mom(refresh_mom_stats(), week)
     posting = build_posting_week(week)
     signals = []
     for table in SIGNAL_TABLES:

@@ -36,7 +36,7 @@ def test_has_refresh_mom_stats_then_comparison():
     tree = _tree()
     tasks = list(_task_functions(tree))
     assert tasks[:2] == ["refresh_mom_stats", "compare_mcf_with_mom"]
-    assert "compare_mcf_with_mom(refresh_mom_stats())" in DAG_FILE.read_text(encoding="utf-8")
+    assert "compare_mcf_with_mom(refresh_mom_stats(), week)" in DAG_FILE.read_text(encoding="utf-8")
 
 
 def test_has_the_signal_tasks():
@@ -63,11 +63,14 @@ def test_dag_settings():
     assert "params" not in kwargs                      # the week comes from the data interval only
 
 
-def test_comparison_takes_the_week_from_the_run():
-    """The comparison must read the run's data interval, not the latest snapshot in the table."""
+def test_comparison_uses_pick_snapshots_week_and_snapshot():
+    """Review 4 Nov #12: one snapshot lookup per run, shared by the comparison and the signals."""
+    compare = _task_functions(_tree())["compare_mcf_with_mom"]
+    assert [a.arg for a in compare.args.args] == ["mom_stats", "week"]
+    body = ast.unparse(compare)
+    assert "snapshot_date=date.fromisoformat(week['snapshot_date'])" in body
+    assert "data_interval" not in body
     src = DAG_FILE.read_text(encoding="utf-8")
-    assert "def compare_mcf_with_mom(mom_stats: dict, data_interval_start=None, data_interval_end=None)" in src
-    assert "snapshot_week.week_bounds(data_interval_start, data_interval_end)" in src
     code = src.replace(ast.get_docstring(_tree(), clean=False), "")   # the docstring may mention it
     assert "max(snapshot_date)" not in code
 

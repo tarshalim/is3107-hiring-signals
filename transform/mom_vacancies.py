@@ -246,16 +246,20 @@ def _mom_quarter(cur, year: int, quarter_num: int) -> dict:
     return dict(cur.fetchall())
 
 
-def build_comparison(conn, after, up_to, threshold_pp: float = DISAGREE_PP) -> dict:
-    """Write metrics.mcf_vs_mom_share for the latest MCF snapshot in the week (after, up_to] (see
-    transform/snapshot_week.py), against MOM's latest quarter. Raises NoSnapshotInWeek if the week has
-    no snapshot.
+def build_comparison(conn, after, up_to, threshold_pp: float = DISAGREE_PP, snapshot_date=None) -> dict:
+    """Write metrics.mcf_vs_mom_share for one MCF snapshot in the week (after, up_to], against MOM's latest
+    quarter. The DAG passes snapshot_date, the day pick_snapshot chose for the signals, so both use the same
+    day even if the transform commits a new day in between. Without it (CLI) the latest snapshot in the week
+    is used (transform/snapshot_week.py), raising NoSnapshotInWeek if the week has none.
 
     Rerun-safe: in one transaction it first deletes the rows of every snapshot in this week, then inserts.
     So a rerun replaces the week's rows, even when it picks a later day than the first try did (e.g. the
     first try ran before Tuesday's transform finished and used Monday)."""
+    if snapshot_date is not None and not after < snapshot_date <= up_to:
+        raise ValueError(f"snapshot {snapshot_date} is not in the week {after + timedelta(days=1)} to {up_to}")
     with conn, conn.cursor() as cur:
-        snapshot_date = latest_snapshot_in_week(cur, after, up_to)
+        if snapshot_date is None:
+            snapshot_date = latest_snapshot_in_week(cur, after, up_to)
         mcf_by_ssoc = _mcf_counts(cur, snapshot_date)
         cur.execute("SELECT quarter, year, quarter_num FROM clean.mom_vacancy_quarterly ORDER BY quarter_start DESC LIMIT 1")
         latest = cur.fetchone()

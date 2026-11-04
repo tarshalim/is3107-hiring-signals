@@ -97,6 +97,33 @@ def test_week_end_ready_does_not_wait_for_a_tuesday_that_was_missed():
     assert sw.week_end_ready(ReadyCursor(logged=logged, loaded=logged), date(2026, 10, 27))
 
 
+def test_build_comparison_refuses_a_snapshot_outside_its_week():
+    with pytest.raises(ValueError, match="not in the week"):
+        mv.build_comparison(None, date(2026, 10, 27), date(2026, 11, 3), snapshot_date=date(2026, 10, 27))
+
+
+def test_build_comparison_uses_the_given_snapshot_without_looking_one_up():
+    """The DAG passes pick_snapshot's day, so the comparison never does its own 'latest day' lookup."""
+    class StopConn:
+        def __init__(self):
+            self.cur = FakeCursor(LOADED)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def cursor(self):
+            return self.cur
+
+    conn = StopConn()
+    with pytest.raises(Exception):       # the fake cursor has no MOM rows; we only check the first query
+        mv.build_comparison(conn, date(2026, 10, 27), date(2026, 11, 3), snapshot_date=date(2026, 11, 2))
+    first_sql, first_params = conn.cur.statements[0]
+    assert "max(snapshot_date)" not in first_sql and first_params == (date(2026, 11, 2),)
+
+
 def test_build_comparison_writes_nothing_for_a_missing_week():
     class FakeConn:
         def __init__(self):
