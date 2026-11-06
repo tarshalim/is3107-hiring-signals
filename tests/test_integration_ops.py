@@ -3,7 +3,8 @@
     WAREHOUSE_TEST_DSN=postgresql://jobs:<pw>@localhost:5433/jobs pytest tests/test_integration_ops.py -v
 
 Creates its own scratch database `is3107_test_ops` (never the warehouse itself), applies every sql/init file in
-order and the new ones twice (rerunnable), then checks the alert log written by dags/common/alerts.py.
+order and the new ones twice (rerunnable), then checks the alert log written by dags/common/alerts.py and the
+schema-drift history written by quality/snapshot_checks.py.
 """
 import os
 from pathlib import Path
@@ -14,12 +15,13 @@ import pytest
 psycopg2 = pytest.importorskip("psycopg2")
 
 from common import alerts  # noqa: E402
+from quality import snapshot_checks as sc  # noqa: E402
 
 DSN = os.environ.get("WAREHOUSE_TEST_DSN")
 pytestmark = pytest.mark.skipif(not DSN, reason="set WAREHOUSE_TEST_DSN to run against a Postgres warehouse")
 REPO = Path(__file__).resolve().parent.parent
 TEST_DB = "is3107_test_ops"
-NEW_FILES = ["09_ops_alerts.sql"]
+NEW_FILES = ["09_ops_alerts.sql", "10_ops_schema_fields.sql"]
 
 
 def _test_dsn():
@@ -90,3 +92,40 @@ def test_dashboard_query_reads_the_log(conn, monkeypatch):
     from dashboard.tabs import pipeline
     frame = pipeline.alert_log()
     assert len(frame) == 3 and set(frame["event"]) == {"task_retry", "task_failed", "dag_run_failed"}
+
+
+def _drift_row(conn, day):
+    with conn.cursor() as cur:
+        cur.execute("SELECT status, observed, details FROM clean.dq_results WHERE snapshot_date = %s "
+                    "AND check_name = 'raw_schema_drift'", (day,))
+        row = cur.fetchone()
+    conn.rollback()
+    return row
+
+
+def test_schema_drift_history(conn, make_payload):
+    assert sc.drift_tables_ready(conn)
+    base = [make_payload(), make_payload(hiringCompany={"name": "Agency client"})]
+    stats, n = sc.field_stats(base)
+    first = sc.record_schema_drift(conn, "2026-10-24", stats, n)
+    assert first["status"] == "warn" and first["previous_date"] is None          # nothing to compare with yet
+    assert sc.record_schema_drift(conn, "2026-10-25", stats, n)["status"] == "pass"
+    assert _drift_row(conn, "2026-10-25")[0] == "pass"
+
+    changed = make_payload(**{"salary.minimum": "3500", "metadata.newCounter": 1})
+    del changed["ssecEqa"]
+    stats3, n3 = sc.field_stats([changed])
+    out = sc.record_schema_drift(conn, "2026-10-26", stats3, n3)
+    assert out["previous_date"] == "2026-10-25" and out["status"] == "warn"
+    # new metadata.newCounter; missing ssecEqa and hiringCompany.name (no agency posting today); salary.minimum retyped
+    status, observed, details = _drift_row(conn, "2026-10-26")
+    assert status == "warn" and observed == out["changes"] and "metadata.newCounter" in details
+    assert "ssecEqa" in details and "salary.minimum number -> string" in details
+
+    rows = _count(conn, "SELECT count(*) FROM ops.schema_fields WHERE snapshot_date = '2026-10-26'")
+    again = sc.record_schema_drift(conn, "2026-10-26", stats3, n3)                  # rerun: same rows, same verdict
+    assert again == out
+    assert _count(conn, "SELECT count(*) FROM ops.schema_fields WHERE snapshot_date = '2026-10-26'") == rows
+    # an older day reloaded later still compares with the day before it, not with a later one
+    assert sc.record_schema_drift(conn, "2026-10-25", stats, n)["previous_date"] == "2026-10-24"
+    assert _count(conn, "SELECT count(*) FROM clean.dq_results WHERE check_name = 'raw_schema_drift'") == 3

@@ -1,6 +1,7 @@
 """Daily MyCareersFuture snapshot.
 
-fetch_snapshot -> check_snapshot -> load_raw
+fetch_snapshot -> check_snapshot -+-> load_raw
+                                  +-> check_schema_drift   (warn only; beside load_raw, never in its way)
 
 Runs once a day (Singapore time). Each run saves the API's postings to
 data/raw/mcf/<date>.jsonl.gz and loads them into raw.mcf_job_snapshots.
@@ -14,13 +15,14 @@ from pathlib import Path
 
 import pendulum
 from airflow.decorators import dag, task
-from airflow.exceptions import AirflowFailException
+from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from psycopg2.extras import execute_values
 
 from common.alerts import TASK_ALERTS, on_dag_failure   # dags/common: failure and retry alerts
-from ingestion.mcf_client import read_snapshot_batches, snapshot_to_file
-from quality.snapshot_checks import snapshot_problem
+from ingestion.mcf_client import read_snapshot, read_snapshot_batches, snapshot_to_file
+from quality.snapshot_checks import (DRIFT_SAMPLE, drift_tables_ready, field_stats, record_schema_drift,
+                                     snapshot_problem)
 
 RAW_DIR = Path("/opt/airflow/data/raw/mcf")
 MIN_JOBS = 100          # fewer than this means something is wrong with the API call
@@ -97,7 +99,28 @@ def daily_mcf_ingest():
             conn.close()
         return loaded
 
-    load_raw(check_snapshot(fetch_snapshot()))
+    @task
+    def check_schema_drift(stats: dict) -> dict:
+        """Compare the file's JSON field paths with the last stored day (quality/snapshot_checks.py) and record
+        the verdict as raw_schema_drift in clean.dq_results. Warn only, and a separate task beside load_raw, so a
+        changed schema or a failure here can never stop the day's load. Reads the gz file, not the table, so it
+        does not wait for load_raw. About 22 s for 90,000 postings."""
+        if int(os.environ.get("MCF_MAX_PAGES", "0")) > 0:
+            raise AirflowSkipException("trial run: a few pages would make a misleading baseline")
+        conn = PostgresHook(postgres_conn_id="warehouse").get_conn()
+        try:
+            if not drift_tables_ready(conn):
+                raise AirflowSkipException("ops.schema_fields is missing: apply sql/init/10_ops_schema_fields.sql")
+            fields, read = field_stats(read_snapshot(Path(stats["path"])), limit=DRIFT_SAMPLE)
+            out = record_schema_drift(conn, stats["snapshot_date"], fields, read)
+        finally:
+            conn.close()
+        print(json.dumps(out))
+        return out
+
+    checked = check_snapshot(fetch_snapshot())
+    load_raw(checked)
+    check_schema_drift(checked)
 
 
 daily_mcf_ingest()

@@ -1,7 +1,9 @@
-# Alerts and monitoring
+# Alerts, monitoring and schema drift
 
 Written Fri 6 Nov 2026. Code: `dags/common/alerts.py`, `sql/init/09_ops_alerts.sql`, the "Alerts and retries" part
-of `dashboard/tabs/pipeline.py`. Tests: `tests/test_alerts.py`, `tests/test_integration_ops.py`.
+of `dashboard/tabs/pipeline.py`; schema drift (section 7): `quality/snapshot_checks.py`, the ingest DAG's
+`check_schema_drift` task, `sql/init/10_ops_schema_fields.sql`. Tests: `tests/test_alerts.py`,
+`tests/test_snapshot_checks.py`, `tests/test_integration_ops.py`.
 
 ## 1. What it does
 
@@ -98,3 +100,65 @@ with no restart.
 - Count retries per DAG over the collection period (`SELECT dag_id, event, count(*) FROM ops.alert_log GROUP BY 1, 2`):
   the crawl's rate-limit retries that recovered by themselves are the "design for failure" evidence.
 - Video: show the Pipeline health tab's Alerts and retries block.
+
+## 7. Schema-drift check
+
+Dr Lek, about a source changing its schema: "in real life, you wouldn't know" (wk2 [53:04], about 11 times). On
+2 Nov the team compared the API's JSON paths by hand. Now the ingest DAG does it every day:
+
+```
+fetch_snapshot -> check_snapshot -+-> load_raw
+                                  +-> check_schema_drift
+```
+
+- **What it compares.** Every field path of every posting in the day's gz file (`metadata.totalNumberOfView`,
+  `skills[].skill`, `[]` = inside a list), with how many postings have it and the JSON types seen, against the
+  latest earlier day stored in `ops.schema_fields`. Three kinds of change: a **new** path, a **missing** path and a
+  **type change** (e.g. `salary.minimum` from number to string; a field that is null all day is not a type
+  change).
+- **Where the verdict goes.** One row, `raw_schema_drift`, in the existing `clean.dq_results` (category `schema`,
+  severity `warn`), next to the transform's 30 checks, so the Pipeline health tab's data-quality table shows it
+  with no dashboard change. `observed` is the number of changes, `details` names them with posting counts, for
+  example `compared with 2026-11-05 (158 paths, today 159); 1 new: metadata.newCounter (88000 postings)`.
+  The first day has nothing to compare with, so it warns once and stores the baseline.
+- **Why warn and not fail.** A new field breaks nothing (the parser reads named fields). A missing or retyped field
+  that matters also shows up in the transform's own checks (missing core attributes, rejected rows). Failing would
+  stop the day's load, and a lost crawl day cannot be fetched again.
+- **Why a separate task beside `load_raw`, not inside `check_snapshot`:** if the drift step ever errors (a database
+  hiccup), `load_raw` still runs. It reads the gz file, so it does not wait for the load either. Small, atomic
+  tasks (wk7 [106]).
+- **Whole file, not a sample.** The rarest path on 24 Oct, `schemes[].subScheme.*`, is in 0.7% of postings, and
+  reading all 91,825 postings takes about 22 s, so sampling would save little and could make a rare path look
+  missing. `DRIFT_SAMPLE` in `quality/snapshot_checks.py` can cap it if a day ever gets much bigger.
+- **Idempotent.** A rerun deletes and rewrites that day's paths and upserts the one verdict row. An older day
+  reloaded later is compared with the day before it, not with a later day.
+- Trial runs (`MCF_MAX_PAGES` > 0) skip it, so 200 postings never become the baseline. A warehouse without
+  `ops.schema_fields` skips it with a message instead of failing.
+
+**Measured on the real snapshots** (throwaway warehouse, 6 Nov): 24 Oct, 91,825 postings, **158 paths**, stored as
+the baseline; 25 Oct, 88,916 postings, 158 paths, **no change** (`pass`). The same task callable ran inside the
+`is3107-airflow:2.10.5-r1` image against the 25 Oct file with the same result.
+
+**Fill the history from the saved files** (oldest first; safe to rerun), so the report can say "checked on every
+day from 24 Oct":
+
+```bash
+python -m quality.snapshot_checks "data/raw/mcf/*.jsonl.gz"      # WAREHOUSE_* from .env, port 5433; quoted so it also works in PowerShell
+```
+
+### Deploy
+
+```bash
+git pull
+docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/10_ops_schema_fields.sql
+# Windows PowerShell:
+Get-Content sql/init/10_ops_schema_fields.sql | docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+# optional, fill the history from the saved files (on the laptop, with the warehouse on port 5433):
+python -m quality.snapshot_checks "data/raw/mcf/*.jsonl.gz"
+# check
+docker compose exec warehouse psql -U jobs -d jobs -c "SELECT snapshot_date, status, observed, details FROM clean.dq_results WHERE check_name = 'raw_schema_drift' ORDER BY 1;"
+```
+
+The new task appears in the ingest DAG at the next scheduler parse; nothing else in the crawl changes. Between
+the crawl (about 10:25) and the transform's checks (about 10:50) the latest day in `clean.dq_results` holds only
+this one row, so the Pipeline health tab briefly shows one check for today. That is expected.
