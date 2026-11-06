@@ -14,10 +14,16 @@ x-airflow-env: &airflow-env
   TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
   TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
   PYTHONPATH: /opt/airflow
-  # The official image has no openpyxl (reference xlsx files) or rapidfuzz (skill matching). The image's
-  # entrypoint pip-installs this list at container start. Without it the transform DAG's load_reference
-  # task cannot read data/reference/*.xlsx and fuzzy matching falls back to difflib (different results).
-  _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-openpyxl>=3.1 rapidfuzz>=3.0 numpy>=1.26}
+  # No _PIP_ADDITIONAL_REQUIREMENTS any more: openpyxl and rapidfuzz are baked into our own image at build
+  # time, pinned (docker/airflow/Dockerfile, docs/docker-images.md), instead of pip-installed at every start.
+
+# Our Airflow image. Bump the -rN tag whenever docker/airflow/ changes: compose then sees a missing image and
+# builds it on the next `docker compose up -d`, so no laptop keeps running a stale one.
+x-airflow-image: &airflow-image
+  image: is3107-airflow:2.10.5-r1
+  build:
+    context: .
+    dockerfile: docker/airflow/Dockerfile
 
 x-airflow-volumes: &airflow-volumes
   - ./dags:/opt/airflow/dags
@@ -60,7 +66,7 @@ services:
       retries: 10
 
   airflow-init:
-    image: apache/airflow:2.10.5
+    <<: *airflow-image
     user: "${AIRFLOW_UID:-50000}:0"
     environment: *airflow-env
     volumes: *airflow-volumes
@@ -76,7 +82,7 @@ services:
           --firstname Admin --lastname User --email admin@example.com || true
 
   airflow-webserver:
-    image: apache/airflow:2.10.5
+    <<: *airflow-image
     user: "${AIRFLOW_UID:-50000}:0"
     environment: *airflow-env
     volumes: *airflow-volumes
@@ -89,7 +95,7 @@ services:
     restart: unless-stopped
 
   airflow-scheduler:
-    image: apache/airflow:2.10.5
+    <<: *airflow-image
     user: "${AIRFLOW_UID:-50000}:0"
     environment: *airflow-env
     volumes: *airflow-volumes
@@ -102,6 +108,7 @@ services:
     restart: unless-stopped
 
   dashboard:
+    image: is3107-dashboard:r1      # bump when dashboard/Dockerfile or its requirements change
     build:
       context: .
       dockerfile: dashboard/Dockerfile

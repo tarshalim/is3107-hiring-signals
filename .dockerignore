@@ -1,0 +1,6 @@
+# Build context is the repo root, which holds data/ (gigabytes of raw snapshots on the collector laptop), logs/
+# and .git. The Dockerfiles copy only their requirements files (code is mounted at run time), so send only those.
+# A Dockerfile that needs another file must add a ! line here.
+*
+!docker/airflow/requirements.txt
+!dashboard/requirements.txt
