@@ -235,7 +235,7 @@ def pay_verdict(row, t: dict) -> dict:
         return {"value": "n/a", "delta": None,
                 "caption": f"Fewer than {t['salary_min_postings']} open postings with a usable salary."}
     return {"value": money(row["salary_mid_median"]), "delta": None,
-            "caption": f"median a month, {times(row['salary_vs_overall'])} the median posting. Half pay "
+            "caption": f"median a month, {times(row['salary_vs_overall'])} the median posting. The middle half pay "
                        f"{money(row['salary_mid_p25'])} to {money(row['salary_mid_p75'])}."}
 
 
