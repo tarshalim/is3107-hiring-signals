@@ -110,8 +110,16 @@ pip install -r dashboard/requirements.txt
 streamlit run dashboard/app.py
 ```
 
-Seven tabs, all filterable by window (7/14/30 days), occupation group, SSOC major group, job category, skill
-type and emerging skills:
+Three weekly tabs come first and answer the business question from the `metrics` tables of the week picked in
+the sidebar (`docs/dashboard-signals.md`; apply `sql/init/10_dashboard_signals.sql` once on an existing warehouse):
+
+- **Hiring signals**: the headline answers, then shortage skills, barrier skills, unrealistic asks and
+  applications per posting by occupation, each marked as flagged last week too or new.
+- **Skill lookup**: every weekly signal for one skill (demand, pay, shortage, barrier, competition).
+- **Market check**: MCF share of postings against MOM share of vacancies, and what the gap means for the signals.
+
+Seven daily tabs follow, all filterable by window (7/14/30 days), occupation group, SSOC major group, job
+category, skill type and emerging skills:
 
 - **Trending skills**: top 20 skills by share of postings, last-7-days vs previous-7-days change in share, daily trend.
 - **Salary**: P25 to P75 monthly salary bands for skills, skill pairs and occupations (disclosed salaries only),
