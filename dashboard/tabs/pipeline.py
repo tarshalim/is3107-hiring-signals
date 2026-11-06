@@ -3,12 +3,32 @@ import plotly.express as px
 import streamlit as st
 
 from dashboard import queries
+from dashboard.db import run_query
 
 STATUS_ICON = {"pass": "\u2705", "warn": "\u26a0\ufe0f", "fail": "\u274c"}
+EVENT_ICON = {"task_failed": "\u274c", "dag_run_failed": "\u274c", "task_retry": "\U0001f501"}
 
 # Proposal targets
 RELIABILITY_TARGET = 0.95
 EXTRACTION_TARGET = 0.85
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def alert_log(days: int = 14):
+    """Task failures and retries written by the shared Airflow callback (dags/common/alerts.py), newest first.
+    None when this warehouse does not have ops.alert_log yet (sql/init/09_ops_alerts.sql not applied).
+    Kept in this tab rather than queries.py so the alerts block stays self-contained."""
+    if not run_query("SELECT to_regclass('ops.alert_log') IS NOT NULL AS ok").iloc[0]["ok"]:
+        return None
+    return run_query("""
+        SELECT to_char(created_at AT TIME ZONE 'Asia/Singapore', 'YYYY-MM-DD HH24:MI') AS time_sgt,
+               extract(epoch FROM now() - created_at) / 86400.0 AS age_days,
+               event, dag_id, task_id, try_number, exception, log_url, notified, run_id
+        FROM ops.alert_log
+        WHERE created_at > now() - make_interval(days => %(days)s)
+        ORDER BY created_at DESC
+        LIMIT 200
+    """, {"days": days})
 
 
 def render():
@@ -66,6 +86,28 @@ def render():
         st.plotly_chart(px.bar(trend, x="snapshot_date", y="checks", color="status",
                                color_discrete_map={"pass": "#2ca02c", "warn": "#ff7f0e", "fail": "#d62728"},
                                labels={"snapshot_date": ""}), width="stretch")
+
+    st.markdown("**Alerts and retries**")
+    alerts = alert_log()
+    if alerts is None:
+        st.info("The alert log is not set up on this warehouse yet: apply `sql/init/09_ops_alerts.sql` "
+                "(docs/alerts-and-monitoring.md).")
+    elif alerts.empty:
+        st.success("No task failures or retries in the last 14 days.")
+    else:
+        week = alerts[alerts["age_days"] < 7]
+        a, b, c = st.columns(3)
+        a.metric("Failures, last 7 days", int((week["event"] != "task_retry").sum()),
+                 help="Tasks that failed for good (retries used up) plus runs that failed on their own, "
+                      "e.g. a timed-out run.")
+        b.metric("Retries, last 7 days", int((week["event"] == "task_retry").sum()),
+                 help="A task failed and Airflow tried it again. A retry followed by a green run is the pipeline "
+                      "recovering by itself, e.g. from the API's rate limit.")
+        c.metric("Latest alert (SGT)", alerts["time_sgt"].iloc[0])
+        st.dataframe(alerts.assign(event=alerts["event"].map(lambda e: f"{EVENT_ICON.get(e, '')} {e}"))
+                     [["time_sgt", "event", "dag_id", "task_id", "try_number", "exception", "log_url"]],
+                     width="stretch", hide_index=True,
+                     column_config={"log_url": st.column_config.LinkColumn("Airflow log", display_text="open")})
 
     st.markdown("**Skill extraction quality**")
     match = queries.skill_match_quality()

@@ -82,10 +82,11 @@ def test_unknown_event_is_rejected_by_the_table_not_by_the_task(conn):
     assert alerts.handle(bad, connect=_connect, env={}) == {"logged": False, "duplicate": False, "notified": False}
 
 
-def test_dashboard_query_reads_the_log(conn):
+def test_dashboard_query_reads_the_log(conn, monkeypatch):
     pytest.importorskip("pandas")
-    st = pytest.importorskip("streamlit")  # noqa: F841  (queries.py needs it for the cache decorator)
-    os.environ["WAREHOUSE_DSN"] = _test_dsn()
-    from dashboard import queries
-    frame = queries.alert_log.__wrapped__() if hasattr(queries.alert_log, "__wrapped__") else queries.alert_log()
+    pytest.importorskip("plotly")
+    pytest.importorskip("streamlit")                 # the tab module needs both at import time
+    monkeypatch.setenv("WAREHOUSE_DSN", _test_dsn())
+    from dashboard.tabs import pipeline
+    frame = pipeline.alert_log()
     assert len(frame) == 3 and set(frame["event"]) == {"task_retry", "task_failed", "dag_run_failed"}
