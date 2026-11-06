@@ -7,6 +7,8 @@ pytest==9.0.3
 # transform layer (role 2)
 openpyxl==3.1.5       # read the SkillsFuture and SSOC reference xlsx files
 rapidfuzz==3.14.6     # fuzzy skill matching (falls back to difflib if missing)
+# Parquet lake export and its benchmark (transform/lake_export.py, spark/benchmark.py; Airflow's image has 19.0.0)
+pyarrow==26.0.0
 # dashboard (same pins as dashboard/requirements.txt)
 streamlit==1.67.0
 plotly==7.1.0

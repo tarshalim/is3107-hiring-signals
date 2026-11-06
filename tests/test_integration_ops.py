@@ -4,7 +4,7 @@
 
 Creates its own scratch database `is3107_test_ops` (never the warehouse itself), applies every sql/init file in
 order and the new ones twice (rerunnable), then checks the alert log written by dags/common/alerts.py and the
-schema-drift history written by quality/snapshot_checks.py.
+schema-drift history written by quality/snapshot_checks.py, and the Parquet lake export of a transformed day.
 """
 import os
 from pathlib import Path
@@ -21,7 +21,7 @@ DSN = os.environ.get("WAREHOUSE_TEST_DSN")
 pytestmark = pytest.mark.skipif(not DSN, reason="set WAREHOUSE_TEST_DSN to run against a Postgres warehouse")
 REPO = Path(__file__).resolve().parent.parent
 TEST_DB = "is3107_test_ops"
-NEW_FILES = ["09_ops_alerts.sql", "10_ops_schema_fields.sql"]
+NEW_FILES = ["09_ops_alerts.sql", "10_ops_schema_fields.sql", "11_ops_lake_exports.sql"]
 
 
 def _test_dsn():
@@ -129,3 +129,42 @@ def test_schema_drift_history(conn, make_payload):
     # an older day reloaded later still compares with the day before it, not with a later one
     assert sc.record_schema_drift(conn, "2026-10-25", stats, n)["previous_date"] == "2026-10-24"
     assert _count(conn, "SELECT count(*) FROM clean.dq_results WHERE check_name = 'raw_schema_drift'") == 3
+
+
+def test_lake_export_of_a_transformed_day(conn, make_payload, tmp_path):
+    import json
+    import sys
+    pq = pytest.importorskip("pyarrow.parquet")
+    from psycopg2.extras import execute_values
+
+    from transform import lake_export
+    from transform.transform_snapshot import transform_snapshot
+    day = "2026-11-02"
+    jobs = [make_payload(uuid="a" * 32), make_payload(uuid="b" * 32, title="Data Engineer")]
+    with conn, conn.cursor() as cur:
+        execute_values(cur, "INSERT INTO raw.mcf_job_snapshots (snapshot_date, job_uuid, payload) VALUES %s",
+                       [(day, j["uuid"], json.dumps(j)) for j in jobs])
+    transform_snapshot(conn, day, run_id="test-lake")
+
+    out = lake_export.export_day(conn, day, tmp_path)
+    assert out["rows"] == 2 and out["logged"] and out["path"] == f"fact_job_day/snapshot_date={day}/part-0.parquet"
+    table = pq.read_table(tmp_path / out["path"])
+    assert sorted(table.column("job_uuid").to_pylist()) == ["a" * 32, "b" * 32]
+    assert [len(k) for k in table.column("skill_keys").to_pylist()] == [3, 3]          # 3 skills in the fixture
+    first = (tmp_path / out["path"]).read_bytes()
+    assert lake_export.export_day(conn, day, tmp_path)["rows"] == 2                    # rerun overwrites
+    assert (tmp_path / out["path"]).read_bytes() == first
+    assert _count(conn, "SELECT rows FROM ops.lake_exports WHERE dataset = 'fact_job_day' AND partition_key = %s", day) == 2
+    skills = lake_export.export_dim_skill(conn, tmp_path)
+    assert skills["rows"] == 3 and (tmp_path / "dim_skill" / "part-0.parquet").exists()
+    assert lake_export.days_between(conn, "2026-11-01", "2026-11-03") == [day]
+    assert lake_export.export_day(conn, "2026-11-03", tmp_path)["removed"]             # no rows: no partition
+
+    # the Postgres side of the Spark benchmark runs and counts each posting once per skill
+    sys.path.insert(0, str(REPO / "spark"))
+    import benchmark
+    with conn.cursor() as cur:
+        cur.execute(benchmark.SKILL_DEMAND_SQL)
+        rows = cur.fetchall()
+    conn.rollback()
+    assert len(rows) == 3 and all(r[3] == 2 and r[4] == 2 and r[6] == 2 and r[7] == 1.0 for r in rows)
