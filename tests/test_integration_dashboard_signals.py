@@ -141,6 +141,7 @@ def sq(conn):
     from dashboard import signal_queries
     st.cache_data.clear()
     yield signal_queries
+    st.cache_data.clear()        # the AppTest run caches every tab's queries in this process: leave none behind
     patch.undo()
 
 
