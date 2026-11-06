@@ -44,7 +44,7 @@ docker compose exec warehouse psql -U jobs -d jobs -c \
 
 ## Daily ingestion
 
-`fetch_snapshot → check_snapshot → load_raw`, every day at 06:00 Singapore time.
+`fetch_snapshot → check_snapshot → load_raw`, every day at 10:00 Singapore time (`schedule="0 10 * * *"`).
 
 - **fetch_snapshot** pages through the MyCareersFuture API (100 postings per page, retries with
   backoff on 429/5xx) and saves the raw postings to `data/raw/mcf/<date>.jsonl.gz`.

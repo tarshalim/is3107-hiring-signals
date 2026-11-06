@@ -1,8 +1,13 @@
 # Weekly metrics: what the tables mean and how to run them
 
 One DAG, `weekly_metrics` (`dags/weekly_metrics_dag.py`), fills the `metrics` schema once a week. It reads only
-`clean`, writes only `metrics`, and the dashboard reads only `metrics` (Dr Lek: results are loaded to a separate
-location and read from there). It has two independent branches that share one week and one snapshot:
+`clean` and writes only `metrics` (Dr Lek: results are loaded to a separate location and read from there). The
+Streamlit dashboard reads its own precomputed layer, not these tables: the analysis tabs read the `mart`
+materialized views (`sql/init/07_dashboard_marts.sql`, rebuilt by the daily transform), the salary estimator reads
+its stored model in `ml`, the sidebar reads `clean.ref_ssoc` for occupation labels, and the Pipeline health tab
+reads the run logs (`raw.ingest_runs`, `clean.load_log`, `clean.dq_results`, `ops.alert_log`), the skill match
+counts in `clean.dim_skill` and the latest day in `clean.fact_job_day`. The DAG has two independent branches that
+share one week and one snapshot:
 
 ```
 refresh_mom_stats -> compare_mcf_with_mom                       metrics.mcf_vs_mom_share  (sql/init/03_mom_vacancies.sql)
