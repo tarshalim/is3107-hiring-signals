@@ -26,6 +26,7 @@ from airflow.decorators import dag, task
 from airflow.exceptions import AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
+from common.alerts import TASK_ALERTS, on_dag_failure   # dags/common: failure and retry alerts
 from ingestion.datagov_wages import DATASET_IDS, LOADERS, download_dataset
 from ingestion.ext_sources import EXT_DATA_DIR, KAGGLE_MCF_2019, sha256_of
 from ingestion.kaggle_mcf2019 import load_kaggle_mcf2019, map_titles_to_ssoc
@@ -44,7 +45,8 @@ def _warehouse_conn():
     start_date=pendulum.datetime(2026, 11, 2, tz="Asia/Singapore"),
     catchup=False,
     max_active_runs=1,
-    default_args={"retries": 2, "retry_delay": timedelta(minutes=5)},
+    default_args={"retries": 2, "retry_delay": timedelta(minutes=5), **TASK_ALERTS},
+    on_failure_callback=on_dag_failure,   # run-level failures, e.g. a timed-out run (dags/common/alerts.py)
     tags=["ext", "warehouse"],
     doc_md=__doc__,
 )

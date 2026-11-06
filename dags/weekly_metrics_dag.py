@@ -62,6 +62,7 @@ from airflow.exceptions import AirflowFailException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sensors.base import PokeReturnValue
 
+from common.alerts import TASK_ALERTS, on_dag_failure   # dags/common: failure and retry alerts
 from metrics.build_week import (SIGNAL_TABLES, build_table, finish_run_log, resolve_week, run_metric_checks,
                                 start_run_log)
 from quality.clean_checks import summarise
@@ -82,7 +83,8 @@ def _warehouse_conn():
     start_date=pendulum.datetime(2026, 10, 20, 14, tz=SGT),   # first run covers the week ending 27 Oct
     catchup=True,
     max_active_runs=1,
-    default_args={"retries": 2, "retry_delay": timedelta(minutes=10)},
+    default_args={"retries": 2, "retry_delay": timedelta(minutes=10), **TASK_ALERTS},
+    on_failure_callback=on_dag_failure,   # run-level failures, e.g. a timed-out run (dags/common/alerts.py)
     tags=["metrics", "mom"],
     doc_md=__doc__,
 )

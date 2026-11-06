@@ -46,7 +46,8 @@ def test_dag_settings_follow_l7():
     assert ast.literal_eval(kwargs["dag_id"]) == "daily_mcf_transform"
     assert ast.literal_eval(kwargs["max_active_runs"]) == 1
     assert "Asia/Singapore" in ast.unparse(kwargs["start_date"]) or "SGT" in ast.unparse(kwargs["start_date"])
-    default_args = {k.value: v for k, v in zip(kwargs["default_args"].keys, kwargs["default_args"].values)}
+    default_args = {k.value: v for k, v in zip(kwargs["default_args"].keys, kwargs["default_args"].values)
+                    if k is not None}           # None = a **spread, e.g. **TASK_ALERTS (tests/test_alerts.py)
     assert ast.literal_eval(default_args["retries"]) >= 1
 
 

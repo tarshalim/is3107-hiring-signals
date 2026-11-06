@@ -18,6 +18,7 @@ from airflow.exceptions import AirflowFailException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from psycopg2.extras import execute_values
 
+from common.alerts import TASK_ALERTS, on_dag_failure   # dags/common: failure and retry alerts
 from ingestion.mcf_client import read_snapshot_batches, snapshot_to_file
 from quality.snapshot_checks import snapshot_problem
 
@@ -33,7 +34,8 @@ BATCH_SIZE = 1000       # rows per INSERT when loading into Postgres
     start_date=pendulum.datetime(2026, 10, 21, tz="Asia/Singapore"),
     catchup=False,         # past days can't be re-fetched, so never backfill
     max_active_runs=1,
-    default_args={"retries": 3, "retry_delay": timedelta(minutes=10)},
+    default_args={"retries": 3, "retry_delay": timedelta(minutes=10), **TASK_ALERTS},
+    on_failure_callback=on_dag_failure,   # run-level failures, e.g. a timed-out run (dags/common/alerts.py)
     tags=["ingestion", "mcf"],
 )
 def daily_mcf_ingest():
