@@ -14,8 +14,8 @@ format Spark, pandas and DuckDB all read. Postgres stays the system of record an
 
 Idempotent (wk7 [056]): a partition is written to a hidden temporary file in its folder and renamed over
 part-0.parquet in one step (os.replace), so a rerun overwrites the day and a reader never sees half a file. Files
-starting with '.' or '_' are ignored by Spark and pyarrow. A day with no rows in clean has its partition removed,
-so the lake mirrors clean. The export log goes to ops.lake_exports (sql/init/12_ops_lake_exports.sql).
+starting with '.' or '_' are ignored by Spark and pyarrow. A day with no rows in clean has its partition and its
+log row removed, so the lake mirrors clean. The export log goes to ops.lake_exports (sql/init/12_ops_lake_exports.sql).
 
     python -m transform.lake_export --date 2026-10-24 --date 2026-10-25     # chosen days
     python -m transform.lake_export --all                                     # every day in clean.fact_job_day
@@ -173,10 +173,14 @@ def _batches(conn, sql, params, columns, name):
     conn.rollback()                          # end the read-only transaction
 
 
+def _has_log_table(cur) -> bool:
+    cur.execute("SELECT to_regclass('ops.lake_exports') IS NOT NULL")
+    return cur.fetchone()[0]
+
+
 def _log(conn, dataset, partition_key, rows, nbytes, seconds, path):
     with conn, conn.cursor() as cur:
-        cur.execute("SELECT to_regclass('ops.lake_exports') IS NOT NULL")
-        if not cur.fetchone()[0]:
+        if not _has_log_table(cur):
             return False                 # 12_ops_lake_exports.sql not applied: the files are still written
         cur.execute("""
             INSERT INTO ops.lake_exports (dataset, partition_key, rows, bytes, seconds, path)
@@ -184,6 +188,16 @@ def _log(conn, dataset, partition_key, rows, nbytes, seconds, path):
             ON CONFLICT (dataset, partition_key) DO UPDATE SET rows = EXCLUDED.rows, bytes = EXCLUDED.bytes,
                 seconds = EXCLUDED.seconds, path = EXCLUDED.path, exported_at = now()
         """, (dataset, partition_key, rows, nbytes, round(seconds, 3), path))
+    return True
+
+
+def _unlog(conn, dataset, partition_key):
+    """Drop the log row of a file write_atomic just removed (no rows now), so ops.lake_exports never lists a file
+    that is gone and the scale report's average bytes per day stays over real files."""
+    with conn, conn.cursor() as cur:
+        if not _has_log_table(cur):
+            return False
+        cur.execute("DELETE FROM ops.lake_exports WHERE dataset = %s AND partition_key = %s", (dataset, partition_key))
     return True
 
 
@@ -196,8 +210,9 @@ def export_day(conn, snapshot_date, lake_dir: Path | None = None) -> dict:
                               partition_dir(lake_dir, snapshot_date), arrow_schema(FACT_COLUMNS))
     seconds = time.perf_counter() - t0
     if path is None:
+        logged = _unlog(conn, FACT_DATASET, str(snapshot_date))
         return {"dataset": FACT_DATASET, "snapshot_date": str(snapshot_date), "rows": 0, "bytes": 0,
-                "seconds": round(seconds, 3), "removed": True}
+                "seconds": round(seconds, 3), "removed": True, "logged": logged}
     nbytes, rel = path.stat().st_size, path.relative_to(lake_dir).as_posix()
     logged = _log(conn, FACT_DATASET, str(snapshot_date), rows, nbytes, seconds, rel)
     return {"dataset": FACT_DATASET, "snapshot_date": str(snapshot_date), "rows": rows, "bytes": nbytes,
@@ -211,7 +226,9 @@ def export_dim_skill(conn, lake_dir: Path | None = None) -> dict:
                               lake_dir / SKILL_DATASET, arrow_schema(SKILL_COLUMNS))
     seconds = time.perf_counter() - t0
     if path is None:
-        return {"dataset": SKILL_DATASET, "rows": 0, "bytes": 0, "seconds": round(seconds, 3), "removed": True}
+        logged = _unlog(conn, SKILL_DATASET, "all")
+        return {"dataset": SKILL_DATASET, "rows": 0, "bytes": 0, "seconds": round(seconds, 3), "removed": True,
+                "logged": logged}
     nbytes, rel = path.stat().st_size, path.relative_to(lake_dir).as_posix()
     logged = _log(conn, SKILL_DATASET, "all", rows, nbytes, seconds, rel)
     return {"dataset": SKILL_DATASET, "rows": rows, "bytes": nbytes, "seconds": round(seconds, 3),

@@ -3,6 +3,7 @@
 -- written, how big it is and how long it took, for the scale and cost numbers (docs/scale-and-cost.md).
 --
 -- Upserted on (dataset, partition_key), so re-exporting a day overwrites its row, as the export overwrites its file.
+-- A day that has no rows when re-exported loses its row, as it loses its file.
 -- This file is idempotent (IF NOT EXISTS). It runs on first container start after 01 to 11. On an existing warehouse
 -- apply it by hand before unpausing weekly_lake_export.
 

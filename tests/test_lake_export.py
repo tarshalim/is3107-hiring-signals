@@ -72,6 +72,103 @@ def test_a_day_with_no_rows_removes_its_partition(tmp_path):
     assert not folder.exists()
 
 
+class _Warehouse:
+    """Just enough of a psycopg2 connection for export_day and export_dim_skill. `source` is what the export query
+    returns, `exports` is ops.lake_exports keyed by (dataset, partition_key), and with `fail_after` set the
+    connection drops once that many rows have been fetched."""
+
+    def __init__(self, source=()):
+        self.source, self.exports, self.fail_after = list(source), {}, None
+
+    def cursor(self, name=None):
+        return _Cursor(self)
+
+    def rollback(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _Cursor:
+    def __init__(self, wh):
+        self.wh, self.pending, self.fetched, self.itersize = wh, [], 0, None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None):
+        if "to_regclass('ops.lake_exports')" in sql:
+            self.pending = [(True,)]
+        elif "INSERT INTO ops.lake_exports" in sql:
+            dataset, key, rows, nbytes, _, path = params
+            self.wh.exports[(dataset, key)] = {"rows": rows, "bytes": nbytes, "path": path}
+        elif "DELETE FROM ops.lake_exports" in sql:
+            self.wh.exports.pop(tuple(params), None)
+        else:                                                             # FACT_SQL or SKILL_SQL
+            self.pending = list(self.wh.source)
+
+    def fetchone(self):
+        return self.pending.pop(0)
+
+    def fetchmany(self, n):
+        if self.wh.fail_after is not None and self.fetched >= self.wh.fail_after:
+            raise ConnectionError("server closed the connection unexpectedly")
+        batch, self.pending = self.pending[:n], self.pending[n:]
+        self.fetched += len(batch)
+        return batch
+
+
+def _skill_row(key=1):
+    return (key, f"mcf-{key}", "Python", False, "Python", None, None, False, "unmatched")
+
+
+def test_a_day_that_becomes_empty_loses_its_file_and_its_log_row(tmp_path):
+    wh = _Warehouse([_fact_row(), _fact_row("b" * 32)])
+    out = lx.export_day(wh, "2026-10-24", tmp_path)
+    other = lx.export_day(wh, "2026-10-25", tmp_path)
+    assert out["rows"] == 2 and out["logged"] and (tmp_path / out["path"]).stat().st_size == out["bytes"]
+    assert wh.exports[("fact_job_day", "2026-10-24")] == {"rows": 2, "bytes": out["bytes"], "path": out["path"]}
+    wh.source = []                                                      # the day has no rows in clean any more
+    gone = lx.export_day(wh, "2026-10-24", tmp_path)
+    assert gone["removed"] and gone["logged"] and gone["rows"] == 0
+    assert not lx.partition_dir(tmp_path, "2026-10-24").exists()
+    assert ("fact_job_day", "2026-10-24") not in wh.exports            # no row left for a file that is gone
+    assert wh.exports == {("fact_job_day", "2026-10-25"): {"rows": 2, "bytes": other["bytes"], "path": other["path"]}}
+    assert (tmp_path / other["path"]).exists()
+
+
+def test_an_empty_dim_skill_loses_its_file_and_its_log_row(tmp_path):
+    wh = _Warehouse([_skill_row(1), _skill_row(2)])
+    out = lx.export_dim_skill(wh, tmp_path)
+    assert out["rows"] == 2 and wh.exports[("dim_skill", "all")]["path"] == "dim_skill/part-0.parquet"
+    wh.source = []
+    gone = lx.export_dim_skill(wh, tmp_path)
+    assert gone["removed"] and gone["logged"] and not (tmp_path / "dim_skill").exists() and wh.exports == {}
+
+
+@pytest.mark.parametrize("fail_after", [0, 1])    # 0: before any row, so it must not pass for an empty day
+def test_a_failed_export_leaves_the_previous_file_and_log_row(tmp_path, monkeypatch, fail_after):
+    import pyarrow.dataset as ds
+    wh = _Warehouse([_fact_row()])
+    first = lx.export_day(wh, "2026-10-24", tmp_path)
+    before, row = (tmp_path / first["path"]).read_bytes(), dict(wh.exports[("fact_job_day", "2026-10-24")])
+    monkeypatch.setattr(lx, "BATCH_ROWS", 1)           # one row per batch, so fail_after=1 drops mid-file
+    wh.source, wh.fail_after = [_fact_row("b" * 32), _fact_row("c" * 32)], fail_after
+    with pytest.raises(ConnectionError):
+        lx.export_day(wh, "2026-10-24", tmp_path)
+    assert (tmp_path / first["path"]).read_bytes() == before
+    assert wh.exports == {("fact_job_day", "2026-10-24"): row}
+    table = ds.dataset(tmp_path / "fact_job_day", format="parquet", partitioning="hive").to_table()
+    assert table.column("job_uuid").to_pylist() == ["a" * 32]          # a half-written temp file is never read
+
+
 def test_partitions_read_back_as_one_dataset(tmp_path):
     import pyarrow.dataset as ds
     schema = lx.arrow_schema(lx.FACT_COLUMNS)

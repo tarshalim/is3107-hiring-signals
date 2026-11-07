@@ -31,8 +31,8 @@ clean star (Postgres) --weekly_lake_export--> data/lake/fact_job_day/snapshot_da
 - **Idempotent.** Each day is written to a hidden temp file in its folder and renamed over `part-0.parquet` in one
   step, so a rerun overwrites the day and a reader never sees half a file (files starting with `.` or `_` are
   ignored by Spark and pyarrow). A rerun gives a byte-identical file (checked with md5 in the Airflow image). A
-  day with no rows in clean loses its folder, so the lake mirrors clean. Every write is logged in
-  `ops.lake_exports` (rows, bytes, seconds).
+  day with no rows in clean loses its folder and its `ops.lake_exports` row, so the lake mirrors clean. Every write
+  is logged in `ops.lake_exports` (rows, bytes, seconds).
 - **Memory.** Rows stream from a server-side cursor in batches of 50,000 (one Parquet row group each), so the
   export never holds a day as Python objects.
 - **The DAG** `weekly_lake_export`: `list_week_days -> export_day` (one mapped task per day, at most 2 at once) plus
