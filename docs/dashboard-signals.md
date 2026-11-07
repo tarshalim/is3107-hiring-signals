@@ -16,11 +16,11 @@ the snapshot the week was read from. The daily filters below it apply only to th
 
 | Tab, section | What it shows | Reads |
 |---|---|---|
-| Hiring signals, top | Four tiles, one per signal: share of shortage postings and the top shortage skills, number of barrier skills and the strongest, Junior Executive and entry-level postings asking 2+ years with their pay gap, the gap in applications per posting between occupation groups. One caution line from the MOM comparison | `skill_signals`, `unrealistic_requirements`, `competitiveness`, `mcf_vs_mom_share` |
+| Hiring signals, top | Four tiles, one per signal: share of shortage postings and the top shortage skills, number of barrier skills and the strongest, entry-level postings asking 2+ years with their pay gap (Junior Executive second, with its higher pay), the gap in applications per posting between occupation groups. One caution line from the MOM comparison | `skill_signals`, `unrealistic_requirements`, `competitiveness`, `mcf_vs_mom_share` |
 | Which cause shows up where? | A grid: one row per job category (500+ postings) or SSOC major group, one column per signal (few applicants, shortage, barrier, entry level asking 2+ years). The number is the group's value; the colour is how many times the market it is, turned so red always points to hard to fill, blue the opposite, grey about the same (capped at 4x). Under each value, the postings it rests on; a cell on fewer than 100 postings is flat grey with muted text, outside the colour scale (on 3 Nov only four entry-level cells, e.g. Personal Care / Beauty's 42). Rows with the fewest applicants first. Hover: the cell's base, postings, agency share, median pay | `group_signals`, `competitiveness` |
 | 1. Shortage | Top 15 skills by lift, bar text = shortage postings and employers, dark bar = also listed last week, light = new this week; every listed skill in a table | `skill_signals` (from `shortage_skill`) |
 | 2. Barrier | Top 15 skills the run flagged (`is_barrier`), same encoding | `skill_signals` (from `barrier_skill`) |
-| 3. Unrealistic ask | The three flags with their share, change since last week and pay against other postings; by job category, share bars next to a pay comparison | `unrealistic_requirements` |
+| 3. Unrealistic ask | Leads with entry level asking 2+ years (6.3% on 3 Nov, +1% pay: the clearest unrealistic ask), then Junior Executive (47%, but +21% pay: more likely mid-level roles labelled junior); each with its share, change since last week, pay against other postings and that reading of the pay gap. By job category, share bars next to a pay comparison. Below, "reposted despite many applicants" as one line: a minor signal with its share of direct employers' postings | `unrealistic_requirements` |
 | 4. Competition | Applications per posting per 24 hours by SSOC major group (30+ postings) and by occupation (fewest or most, minimum-postings slider); last week as a black tick | `competitiveness` |
 | Skill lookup | One skill, every signal: demand share in the latest fully observed posting week, pay band and premium, shortage, barrier, competition, a one-line verdict, and this week against last week. Opens on the most common skill of the shortage chart | `skill_signals` |
 | Market check | MCF share of postings against MOM share of vacancies by group (3 groups, or PME and non-PME), gap written on the chart, one line on what it means for the signals, and a table with MOM's 1- and 5-year change and applications per posting | `mcf_vs_mom_share`, `competitiveness` (`mom_group`) |
@@ -76,6 +76,14 @@ Tests: `tests/test_dashboard_signals.py` (logic, and offline checks that the vie
 `metrics` and are parameterised) and `tests/test_integration_dashboard_signals.py` (Postgres, skipped without
 `WAREHOUSE_TEST_DSN`: three hand-made weeks, one failed, checked against hand-worked values, then the whole app
 rendered with Streamlit AppTest).
+
+## What changed on 8 Nov
+
+- **Unrealistic ask leads with entry level** asking 2+ years (little extra pay), Junior Executive second with
+  the note that it pays 21% more. The tile at the top follows the same order.
+- **Reposted despite many applicants** counts direct employers only, as shortage does, and is shown as a minor
+  signal with its share.
+- **Generic skill tags** (`data/reference/generic_skill_tags.csv`) are left out of every skill-level signal.
 
 ## What changed on 7 Nov
 

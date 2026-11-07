@@ -331,6 +331,23 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
     # the barrier signal does not look at the poster
     assert _all(conn, "SELECT skill_name FROM metrics.barrier_skill WHERE week_end_date = %s AND is_barrier", D3) \
         == [("Pack goods",)]
+    # reposted with many applications: d is the only one, and it is a direct employer's in the main run; here
+    # every posting is an agency's, so the flag's base (direct employers) is empty
+    assert _one(conn, """SELECT base_postings, flagged_postings FROM metrics.unrealistic_requirements
+                         WHERE week_end_date = %s AND flag = 'reposted_many_apps' AND group_type = 'overall'""",
+                D3) is None
+
+    # ---- a generic tag (here Forklift Operation, for the test) is left out of every skill-level table ------------
+    run_week(conn, D3 - timedelta(days=7), D3, run_id="test-w3-generic",
+             thresholds={**SMALL, "generic_skill_tags": ["forklift operation"]})
+    for table in ("barrier_skill", "shortage_skill", "skill_demand"):
+        assert _all(conn, f"SELECT skill_name FROM metrics.{table} WHERE week_end_date = %s "
+                          "AND skill_name = 'Forklift Operation'", D3) == [], table
+    assert _all(conn, """SELECT group_label FROM metrics.competitiveness WHERE week_end_date = %s
+                         AND group_type = 'skill' AND group_label = 'Forklift Operation'""", D3) == []
+    # c keeps its shortage flag: only the skill tables leave the tag out
+    assert _one(conn, "SELECT count(*) FILTER (WHERE is_shortage) FROM metrics.posting_week WHERE week_end_date = %s",
+                D3) == (1,)
 
     # ---- a barrier skill must also get fewer applications per view than the whole market: Pack goods (g, 7 / 120 =
     # 0.0583) against 340 / 2,080 = 0.1635 overall is 0.357 of it; a cap of 0.3 drops it ----------------------

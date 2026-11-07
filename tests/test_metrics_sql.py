@@ -144,6 +144,36 @@ def test_barrier_uses_views_per_day_within_the_ssoc_group_and_a_lift():
             t["barrier_min_flagged"]) == (0.75, 0.8, 1.5, 25)
 
 
+def test_generic_tags_are_left_out_of_every_skill_level_table():
+    """data/reference/generic_skill_tags.csv: one row per tag with a kind and a one-line reason."""
+    import csv
+    with open(build_week.GENERIC_SKILL_TAGS_CSV, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows and all(r["mcf_skill_name"].strip() and r["reason"].strip() for r in rows)
+    assert {r["kind"] for r in rows} <= {"ambiguous", "fragment", "sector"}
+    tags = THRESHOLDS["generic_skill_tags"]
+    assert "cuts" in tags and tags == sorted(set(tags)) and all(t == t.lower() for t in tags)
+    # every skill-level table reads skills through one of these three filtered joins
+    assert "lower(s.mcf_skill_name) <> ALL(%(generic_skill_tags)s::text[])" in build_week._POOL_SKILL
+    for name in ("barrier_skill", "shortage_skill", "competitiveness", "skill_salary"):
+        assert "{_POOL_SKILL}" not in INSERT_SQL[name] and "pool_skill AS (" in INSERT_SQL[name], name
+    competitiveness = " ".join(build_week.COMPETITIVENESS_SQL.split())
+    assert ("WHERE b.job_key IN (SELECT job_key FROM flow_version) AND lower(s.mcf_skill_name) <> "
+            "ALL(%(generic_skill_tags)s::text[])") in competitiveness
+    assert "WHERE lower(sk.mcf_skill_name) <> ALL(%(generic_skill_tags)s::text[])" in \
+        " ".join(build_week.SKILL_DEMAND_SQL.split())
+
+
+def test_reposted_many_apps_counts_direct_employers_only():
+    """As shortage: agencies keep evergreen ads up and repost them. The experience flags keep every poster."""
+    sql = " ".join(build_week.UNREALISTIC_SQL.split())
+    assert ("SELECT 'reposted_many_apps' AS flag, pw.is_reposted_many_apps AS flagged, pw.category, "
+            "pw.ssoc_major_group, pw.position_level, CASE WHEN pw.salary_usable THEN pw.salary_mid END AS salary_mid "
+            "FROM metrics.posting_week pw WHERE pw.week_end_date = %(e)s AND NOT pw.posted_by_agency UNION ALL") in sql
+    assert sql.count("posted_by_agency") == 1
+    assert "Base: open postings by direct employers" in (REPO / "metrics" / "build_week.py").read_text(encoding="utf-8")
+
+
 def test_one_bulk_employer_cannot_make_a_barrier_or_shortage_skill():
     """top_company_share = the skill's flagged postings from its biggest employer / its flagged postings.
     Above THRESHOLDS["max_top_company_share"] (0.5) the skill is not flagged: is_barrier is false, and the skill

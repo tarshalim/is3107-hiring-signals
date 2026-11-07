@@ -12,7 +12,6 @@ FLAG_COLORS = ("#08519c", "#9ecae1")
 FLAG_NAMES = {
     "entry_level_2plus_years": ("Asking 2+ years", "Other entry-level postings"),
     "junior_2plus_years": ("Asking 2+ years", "Other Junior Executive postings"),
-    "reposted_many_apps": ("Reposted despite many applicants", "Other postings"),
 }
 
 
@@ -83,18 +82,20 @@ def _headline(shortage, barrier, unreal, comp, market, t):
             text += f" {kept[0]} of {kept[1]} also flagged last week." if kept else ""
         st.caption(text)
     with c.container(border=True):
-        junior, entry = _overall(unreal, "junior_2plus_years"), _overall(unreal, "entry_level_2plus_years")
-        if junior is None:
+        # entry level leads: the clearest unrealistic ask. Junior Executive second, read through its pay
+        entry, junior = _overall(unreal, "entry_level_2plus_years"), _overall(unreal, "junior_2plus_years")
+        if entry is None:
             st.metric("Unrealistic ask", "n/a")
         else:
-            prev = junior["flagged_share_prev_week"]
-            st.metric("Unrealistic ask", logic.pct(junior["flagged_share"], 0),
-                      delta=None if logic.missing(prev) else logic.points(junior["flagged_share"] - prev),
+            prev = entry["flagged_share_prev_week"]
+            st.metric("Unrealistic ask", logic.pct(entry["flagged_share"]),
+                      delta=None if logic.missing(prev) else logic.points(entry["flagged_share"] - prev),
                       delta_color="off", help="Delta: change since last week, in percentage points.")
-            text = f"of Junior Executive postings ask 2+ years, and pay {_gap_text(junior, short=True)}."
-            if entry is not None:
-                text += (f" Entry level: {logic.pct(entry['flagged_share'])} ask 2+ years, paid "
-                         f"{_gap_text(entry, short=True)}.")
+            text = (f"of entry-level postings ask 2+ years of experience, and pay {_gap_text(entry, short=True)} "
+                    "against other entry-level postings.")
+            if junior is not None:
+                text += (f" Junior Executive: {logic.pct(junior['flagged_share'], 0)} ask 2+ years, but pay "
+                         f"{_gap_text(junior, short=True)}.")
             st.caption(text)
     with d.container(border=True):
         groups = comp[comp["group_type"] == "ssoc_major_group"]
@@ -269,12 +270,12 @@ def _barrier(rows, labels: dict, t):
 # --- unrealistic asks -----------------------------------------------------------------------------
 
 def _unrealistic(unreal, t):
-    st.markdown("#### 3. Unrealistic ask: too much experience, or still searching despite applicants")
+    st.markdown("#### 3. Unrealistic ask: entry-level jobs asking for experience")
     if unreal.empty:
         st.info("No unrealistic-requirement rows this week.")
         return
-    cols = st.columns(3)
-    for col, flag in zip(cols, logic.FLAG_LABELS):
+    cols = st.columns(2)
+    for col, flag in zip(cols, logic.EXPERIENCE_FLAGS):      # entry level first, Junior Executive second
         row = _overall(unreal, flag)
         with col.container(border=True):
             if row is None:
@@ -284,15 +285,34 @@ def _unrealistic(unreal, t):
             st.metric(logic.FLAG_LABELS[flag], logic.pct(row["flagged_share"]),
                       delta=None if logic.missing(prev) else logic.points(row["flagged_share"] - prev),
                       delta_color="off", help=row["rule"])
+            gap = logic.pay_gap(row["flagged_salary_mid_median"], row["other_salary_mid_median"])
+            reading = logic.experience_ask_reading(gap)
             st.caption(f"{int(row['flagged_postings']):,} of {int(row['base_postings']):,} postings. They pay "
-                       f"{_gap_text(row)}.")
+                       f"{_gap_text(row)}" + (f": {reading}." if reading else "."))
 
-    flag = st.radio("By job category", list(logic.FLAG_LABELS), format_func=logic.FLAG_LABELS.get,
+    flag = st.radio("By job category", list(logic.EXPERIENCE_FLAGS), format_func=logic.FLAG_LABELS.get,
                     horizontal=True, key="signals_flag")
     rows = unreal[(unreal["flag"] == flag) & (unreal["group_type"] == "category")]
     if rows.empty:
         st.info(f"No job category has {t['group_min_postings']}+ postings for this flag.")
+    else:
+        _unrealistic_by_category(unreal, rows, flag, t)
+    _reposted_many_apps(_overall(unreal, "reposted_many_apps"))
+
+
+def _reposted_many_apps(row):
+    """The minor signal: one line with its share, under the experience asks."""
+    if row is None:
         return
+    st.markdown(f"**Minor signal: {logic.FLAG_LABELS['reposted_many_apps'].lower()}.** "
+                f"{logic.pct(row['flagged_share'])} of direct employers' open postings "
+                f"({int(row['flagged_postings']):,} of {int(row['base_postings']):,}) were reposted although they "
+                f"draw many applications per day; they pay {_gap_text(row)}. Too few to read by skill or category: "
+                "an employer still searching may be choosy, or hiring several people from one ad.",
+                help=row["rule"])
+
+
+def _unrealistic_by_category(unreal, rows, flag, t):
     rows = rows.sort_values("flagged_share", ascending=False).head(SHOWN)
     rows = rows.assign(label=rows["group_label"].map(logic.short_label))
     order = rows["label"].tolist()[::-1]

@@ -28,14 +28,26 @@ Definitions shared by all signals:
     and a posting counts once per skill_ref.
   - minimum sample sizes come from THRESHOLDS and are stored with every run in metrics.run_log.
 """
+import csv
 import json
 import time
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 from quality.clean_checks import Check, evaluate, summarise
 from metrics.weeks import MAX_GAP_SNAPSHOTS, week_context
 from transform.parse import EXP_MAX
 from transform.snapshot_week import latest_snapshot_in_week
+
+GENERIC_SKILL_TAGS_CSV = Path(__file__).resolve().parent.parent / "data" / "reference" / "generic_skill_tags.csv"
+
+
+def load_generic_skill_tags(path: Path = GENERIC_SKILL_TAGS_CSV) -> list[str]:
+    """Lower-cased MCF tag names left out of every skill-level table: ambiguous tags like "Cuts" (hair, meat or
+    cost cuts), fragments and sector names. The list and a reason for each are in the CSV."""
+    with open(path, newline="", encoding="utf-8") as f:
+        return sorted({row["mcf_skill_name"].strip().lower() for row in csv.DictReader(f)})
+
 
 THRESHOLDS = {
     # open postings (metrics/weeks.py): a crawl skip of up to this many snapshots in a row is not a closure
@@ -58,6 +70,9 @@ THRESHOLDS = {
     # agencies keep evergreen ads up and repost them, which looks like a shortage but is not one. The shortage
     # signal reads direct employers only (posting_week.posted_by_agency)
     "agency_ssic_prefix": "78",
+    # MCF tags too ambiguous to read as a skill, left out of every skill-level table (barrier, shortage, demand,
+    # salary, competitiveness by skill). Stored with the run like every other threshold
+    "generic_skill_tags": load_generic_skill_tags(),
     # usable monthly salary: below 300 are hourly or daily rates typed into the monthly field (for example $12 to
     # $24 "per month" for a packing job, 1,395 postings below 300 on 25 Oct) and placeholders like $1, above
     # 100,000 are annual figures
@@ -105,13 +120,18 @@ SIGNAL_TABLES = (
 # ---------------------------------------------------------------------------------------------
 # Shared SQL fragments (CTEs). %(e)s is the week_end_date, %(s)s the snapshot used.
 # ---------------------------------------------------------------------------------------------
-_POOL_SKILL = """
+def _not_generic(alias: str) -> str:
+    """Condition leaving out the tags of data/reference/generic_skill_tags.csv (alias = the clean.dim_skill alias)."""
+    return f"lower({alias}.mcf_skill_name) <> ALL(%(generic_skill_tags)s::text[])"
+
+
+_POOL_SKILL = f"""
     pool_skill AS (   -- one row per open posting and skill_ref
         SELECT DISTINCT pw.job_uuid, COALESCE(s.ssg_skill_id, s.mcf_skill_uuid) AS skill_ref
         FROM metrics.posting_week pw
         JOIN clean.bridge_job_skill b ON b.job_key = pw.job_key
         JOIN clean.dim_skill s ON s.skill_key = b.skill_key
-        WHERE pw.week_end_date = %(e)s
+        WHERE pw.week_end_date = %(e)s AND {_not_generic("s")}
     )"""
 
 _SKILL_NAMES = """
@@ -374,11 +394,13 @@ INSERT INTO metrics.unrealistic_requirements (week_end_date, snapshot_date, flag
     other_salary_mid_median, rule)
 WITH {_MAJOR_TITLES},
 base AS (
+    -- direct employers only, as for shortage: agencies keep evergreen ads up and repost them (on 3 Nov the top
+    -- employers of this flag were agencies). "Many applications" stays the P90 over all open postings
     SELECT 'reposted_many_apps' AS flag, pw.is_reposted_many_apps AS flagged,
            pw.category, pw.ssoc_major_group, pw.position_level,
            CASE WHEN pw.salary_usable THEN pw.salary_mid END AS salary_mid
     FROM metrics.posting_week pw
-    WHERE pw.week_end_date = %(e)s
+    WHERE pw.week_end_date = %(e)s AND NOT pw.posted_by_agency
     UNION ALL
     -- entry level and junior are separate flags: their shares differ several times over
     SELECT CASE WHEN pw.position_level = ANY(%(entry_levels)s) THEN 'entry_level_2plus_years'
@@ -429,7 +451,7 @@ def _build_unrealistic(cur, p) -> dict:
         "rule_reposted": (f"reposted (repost_count {p['unrealistic_min_reposts']} or more) with {many:g} or more "
                           f"applications per day since first posted (applications_total / days since "
                           f"original_posting_date, at least 1 day), the P{pct} of open postings this week. "
-                          f"Base: all open postings"),
+                          f"Base: open postings by direct employers (employment agencies left out, as for shortage)"),
         "rule_entry": experience_rule(p["entry_levels"]),
         "rule_junior": experience_rule(p["junior_levels"]),
     }
@@ -488,7 +510,7 @@ version_skill AS (
     SELECT DISTINCT b.job_key, COALESCE(s.ssg_skill_id, s.mcf_skill_uuid) AS skill_ref
     FROM clean.bridge_job_skill b
     JOIN clean.dim_skill s ON s.skill_key = b.skill_key
-    WHERE b.job_key IN (SELECT job_key FROM flow_version)
+    WHERE b.job_key IN (SELECT job_key FROM flow_version) AND {_not_generic("s")}
 ),
 flow_rows AS (
     SELECT g.group_type, g.group_key, fv.job_uuid, fv.apps, fv.views, fv.hours
@@ -552,6 +574,7 @@ job_skill AS (
     FROM recent r
     JOIN clean.bridge_job_skill b ON b.job_key = r.job_key
     JOIN clean.dim_skill sk ON sk.skill_key = b.skill_key
+    WHERE {_not_generic("sk")}
 ),
 per AS (
     SELECT skill_ref, posting_week, count(*) AS new_postings, sum(vacancies) AS new_vacancies,

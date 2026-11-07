@@ -195,6 +195,15 @@ def test_barrier_verdict():
     assert "applications per view" not in not_flagged["caption"]       # lift too low: the lift is the reason
 
 
+def test_experience_asks_lead_with_entry_level_and_read_through_pay():
+    assert logic.EXPERIENCE_FLAGS == ("entry_level_2plus_years", "junior_2plus_years")
+    assert "reposted_many_apps" not in logic.EXPERIENCE_FLAGS          # shown apart, as a minor signal
+    # 3 Nov: entry level $3,445 against $3,400 (+1%), Junior Executive $3,800 against $3,150 (+21%)
+    assert "clearest unrealistic ask" in logic.experience_ask_reading(logic.pay_gap(3445, 3400))
+    assert "labelled junior" in logic.experience_ask_reading(logic.pay_gap(3800, 3150))
+    assert logic.experience_ask_reading(0.07) == "" and logic.experience_ask_reading(None) == ""
+
+
 def test_harder_score_points_the_same_way_for_every_column():
     """log2 times the market, turned so that above 0 always means harder to fill, capped at +-2."""
     assert logic.harder_score(0.036, 0.018, True) == pytest.approx(1.0)          # twice the shortage share

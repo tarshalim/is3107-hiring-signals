@@ -40,6 +40,11 @@ FLAG_LABELS = {
     "junior_2plus_years": "Junior Executive asking 2+ years",
     "reposted_many_apps": "Reposted despite many applicants",
 }
+# the two experience asks, in the order the tab shows them: entry level leads (little extra pay, the clearest
+# unrealistic ask), Junior Executive second. reposted_many_apps is shown as a minor signal below them
+EXPERIENCE_FLAGS = ("entry_level_2plus_years", "junior_2plus_years")
+PAY_GAP_SMALL = 0.05        # within 5% of the other postings' median: little extra pay
+PAY_GAP_LARGE = 0.10        # 10% or more above: the role is paid like a more senior one
 
 
 # --- formatting -----------------------------------------------------------------------------------
@@ -74,6 +79,18 @@ def pay_gap(flagged, other) -> float | None:
     if missing(flagged) or missing(other) or not other:
         return None
     return flagged / other - 1
+
+
+def experience_ask_reading(gap) -> str:
+    """How to read postings asking 2+ years at a junior level, from their pay against the others at that level:
+    little extra pay is an unrealistic ask, clearly more pay a more senior role under a junior label."""
+    if gap is None:
+        return ""
+    if abs(gap) < PAY_GAP_SMALL:
+        return "little extra pay for the experience asked, the clearest unrealistic ask"
+    if gap >= PAY_GAP_LARGE:
+        return "paid like more senior roles, so more likely mid-level jobs labelled junior than an unrealistic ask"
+    return ""
 
 
 def short_label(text: str, width: int = 42) -> str:
