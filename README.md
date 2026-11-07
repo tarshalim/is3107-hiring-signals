@@ -9,7 +9,7 @@ unrealistic requirements.
 
 | Folder | What goes there |
 |---|---|
-| `dags/` | Airflow DAGs (daily ingest, 30-minute live poll, daily transform, weekly metrics) |
+| `dags/` | Airflow DAGs (daily ingest, 30-minute live poll, daily transform, weekly metrics, weekly lake export); `dags/common/` holds the shared failure and retry alerts |
 | `ingestion/` | API clients (MyCareersFuture, MOM via data.gov.sg) |
 | `transform/` | Cleaning, deduplication, skill standardisation |
 | `metrics/` | Weekly hiring signals built from the clean layer |
@@ -18,6 +18,9 @@ unrealistic requirements.
 | `dashboard/` | Streamlit dashboard (`app.py`, one module per tab in `tabs/`) |
 | `data/reference/` | Small static files (e.g. SkillsFuture framework). Everything else in `data/` is git-ignored |
 | `tests/` | `pytest` tests |
+| `docker/` | Our own Airflow image (`docker/airflow/Dockerfile`, pinned extras) |
+| `spark/` | PySpark job on the Parquet lake and the lake benchmark (compose profile `spark`) |
+| `ops/` | Hand-run operations scripts: scale, cost and restore report |
 
 ## Run it locally
 
@@ -228,6 +231,23 @@ docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_D
 # Windows PowerShell:
 Get-Content sql/init/04_ext_schema.sql | docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 ```
+
+## Monitoring, images, lake and scale
+
+- **Alerts**: every DAG writes each task failure, retry and timed-out run to `ops.alert_log` (optional Telegram
+  message), shown on the Pipeline health tab. **Schema drift**: the ingest DAG compares each day's JSON field paths
+  with the last stored day and records `raw_schema_drift` in `clean.dq_results`. `docs/alerts-and-monitoring.md`
+- **Our own pinned images**: `is3107-airflow:2.10.5-r1` installs openpyxl and rapidfuzz at build time, not at every
+  container start; the dashboard image and all requirements are pinned. `docs/docker-images.md`
+- **Parquet lake and Spark**: `weekly_lake_export` writes the clean fact rows to `data/lake/` (one Parquet file per
+  day); `docker compose --profile spark run --rm spark` runs a PySpark job on it; `spark/benchmark.py` measures
+  sizes, scan times and Spark against Postgres. `docs/lake-and-spark.md`
+- **Scale, cost and restore**: `python -m ops.scale_report` (one-year projection, timed restore of a day from its
+  gz file). `docs/scale-and-cost.md`
+
+On an existing warehouse apply `sql/init/09_ops_alerts.sql`, `10_ops_schema_fields.sql` and `11_ops_lake_exports.sql`
+once (safe to run twice), then `docker compose build` and `docker compose up -d`. Step by step for the collector
+laptop: `docs/deploy-eng-improvements.md`.
 
 ## Tests
 
