@@ -35,6 +35,26 @@ def test_task_summary_counts_retried_and_failed_runs():
         (3, 2, 20, 30, 1, 1)
 
 
+# Three rows of the collector's 6 Nov airflow_task_runtimes.csv as exported: a timed success, a manual run that
+# ended in success with no start_date or duration, and a skipped live poll.
+TASK_CSV = """dag_id,task_id,run_id,state,try_number,start_date,end_date,duration_s,queued_dttm
+daily_mcf_transform,transform_snapshot_task,scheduled__2026-10-29T02:30:00+00:00,success,1,2026-10-30 14:55:12.484771+00,2026-10-30 14:56:17.533502+00,65.0,2026-10-30 14:55:11.35493+00
+daily_mcf_transform,transform_snapshot_task,manual__2026-10-25T00:00:00+08:00,success,1,,2026-10-27 16:42:05.956396+00,,
+mcf_live_poll,check_poll,scheduled__2026-11-04T01:30:00+00:00,skipped,0,2026-11-04 02:00:01.962459+00,2026-11-04 02:00:01.962459+00,,
+"""
+
+
+def test_a_success_with_no_duration_still_counts_as_a_success(tmp_path):
+    path = tmp_path / "airflow_task_runtimes.csv"
+    path.write_text(TASK_CSV, encoding="utf-8")
+    transform, poll = sr.task_summary(sr.read_csv(path))                 # sorted by (dag_id, task_id)
+    assert transform["task_id"] == "transform_snapshot_task"
+    assert (transform["runs"], transform["successes"], transform["timed_successes"]) == (2, 2, 1)
+    assert (transform["median_s"], transform["max_s"], transform["failed_runs"]) == (65.0, 65.0, 0)
+    assert (poll["runs"], poll["successes"], poll["timed_successes"], poll["median_s"]) == (1, 0, 0, None)
+    assert poll["failed_runs"] == 0 and poll["retried_runs"] == 0
+
+
 def test_projection_is_linear_per_snapshot_day():
     per_day = sr.per_day_bytes({"raw.mcf_job_snapshots": 2_000, "clean.fact_job_day": 200, "clean.dim_job": 100}, 2)
     assert per_day["Raw JSONB (raw.mcf_job_snapshots)"] == 1_000
@@ -64,7 +84,13 @@ def test_render_has_every_section():
               "note": "real data", "ingest": sr.ingest_summary(INGEST), "ingest_source": "ingest_runs.csv",
               "load_log": {"parse_raw": {"days": 2, "median": 24.0, "max": 25.0, "left_out": 0}},
               "load_log_source": "clean.load_log",
-              "tasks": [], "tables": [{"table": "raw.mcf_job_snapshots", "kind": "r", "bytes": 10 * sr.GIB,
+              "tasks": [{"dag_id": "daily_mcf_transform", "task_id": "transform_snapshot_task", "runs": 12,
+                         "successes": 12, "timed_successes": 8, "median_s": 66.2, "max_s": 239.5, "retried_runs": 0,
+                         "failed_runs": 0},
+                        {"dag_id": "daily_mcf_ingest", "task_id": "load_raw", "runs": 16, "successes": 16,
+                         "timed_successes": 16, "median_s": 72.0, "max_s": 229.7, "retried_runs": 0,
+                         "failed_runs": 0}],
+              "tables": [{"table": "raw.mcf_job_snapshots", "kind": "r", "bytes": 10 * sr.GIB,
                                        "rows_estimate": 180_000}],
               "schema_bytes": {"raw": 10 * sr.GIB}, "database_bytes": 11 * sr.GIB,
               "per_day": {"Raw JSONB (raw.mcf_job_snapshots)": 5 * sr.GIB},
@@ -75,9 +101,11 @@ def test_render_has_every_section():
                           "restored_table_bytes": 470_000_000, "verified": True}}
     md = sr.render(report)
     assert md.startswith(sr.BEGIN) and md.endswith(sr.END)
-    for heading in ("### Collection", "### Transform time per day", "### Warehouse size now",
+    for heading in ("### Collection", "### Transform time per day", "### Airflow task runs", "### Warehouse size now",
                     "### Growth per snapshot day and projection", "### Restore test: 2026-10-25.jsonl.gz"):
         assert heading in md
+    assert "| daily_mcf_transform | transform_snapshot_task | 12 | 12 (8 timed) | 66.2 | 239.5 | 0 | 0 |" in md
+    assert "| daily_mcf_ingest | load_raw | 16 | 16 | 72.0 | 229.7 | 0 | 0 |" in md
     assert "| Raw JSONB (raw.mcf_job_snapshots) | 5.0 GB | 150.0 GB | 450.0 GB | 1,825.0 GB | $175.20 |" in md
     assert "| File | 138.3 MB, 88,916 postings |" in md
     assert "**30.2 s**" in md and "passed" in md

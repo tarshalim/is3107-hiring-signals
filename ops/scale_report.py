@@ -125,21 +125,27 @@ def load_log_summary(rows) -> dict:
 
 def task_summary(rows) -> list:
     """Airflow's task_instance export has one row per task per DAG run, holding that run's last try. So: runs,
-    median and max seconds of the successful ones, runs that needed more than one try, runs that ended failed."""
+    runs that ended in success, median and max seconds of the successful ones that have a duration, runs that
+    needed more than one try, runs that ended failed. A success with no duration (e.g. the four manual transform
+    runs in the 6 Nov export, which have no start_date) still counts as a success; timed_successes is how many the
+    median and max are over."""
     out = {}
     for r in rows:
         key = (r["dag_id"], r["task_id"])
-        s = out.setdefault(key, {"tries": 0, "success": [], "retried": 0, "failed": 0})
+        s = out.setdefault(key, {"tries": 0, "successes": 0, "timed": [], "retried": 0, "failed": 0})
         s["tries"] += 1
-        if r.get("state") == "success" and _num(r.get("duration_s")) is not None:
-            s["success"].append(_num(r["duration_s"]))
+        if r.get("state") == "success":
+            s["successes"] += 1
+            if _num(r.get("duration_s")) is not None:
+                s["timed"].append(_num(r["duration_s"]))
         if (_num(r.get("try_number")) or 1) > 1:
             s["retried"] += 1
         if r.get("state") == "failed":
             s["failed"] += 1
-    return [{"dag_id": d, "task_id": t, "runs": s["tries"], "successes": len(s["success"]),
-             "median_s": statistics.median(s["success"]) if s["success"] else None,
-             "max_s": max(s["success"]) if s["success"] else None, "retried_runs": s["retried"],
+    return [{"dag_id": d, "task_id": t, "runs": s["tries"], "successes": s["successes"],
+             "timed_successes": len(s["timed"]),
+             "median_s": statistics.median(s["timed"]) if s["timed"] else None,
+             "max_s": max(s["timed"]) if s["timed"] else None, "retried_runs": s["retried"],
              "failed_runs": s["failed"]}
             for (d, t), s in sorted(out.items())]
 
@@ -294,7 +300,9 @@ def render(r: dict) -> str:
         for t in tasks:
             med = "n/a" if t["median_s"] is None else f"{t['median_s']:.1f}"
             mx = "n/a" if t["max_s"] is None else f"{t['max_s']:.1f}"
-            L.append(f"| {t['dag_id']} | {t['task_id']} | {t['runs']} | {t['successes']} | {med} | {mx} | "
+            ok = (f"{t['successes']}" if t["timed_successes"] == t["successes"]
+                  else f"{t['successes']} ({t['timed_successes']} timed)")       # the median and max are over these
+            L.append(f"| {t['dag_id']} | {t['task_id']} | {t['runs']} | {ok} | {med} | {mx} | "
                      f"{t['retried_runs']} | {t['failed_runs']} |")
         L.append("")
     L += ["### Warehouse size now", "", "| Schema | Size |", "|---|---|"]
