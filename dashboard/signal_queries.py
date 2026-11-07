@@ -69,6 +69,22 @@ def competitiveness(week_end_date, group_types: tuple = ("overall", "mom_group",
 
 
 @st.cache_data(ttl=TTL, show_spinner=False)
+def group_signals(week_end_date):
+    """The share of each posting flag per job category and SSOC major group (and overall), lined up with the
+    same group's applications per posting per day."""
+    return run_query("""
+        SELECT g.group_type, g.group_key, g.group_label, g.postings, g.agency_share, g.direct_postings,
+               g.shortage_postings, g.shortage_share, g.barrier_postings, g.barrier_share, g.entry_postings,
+               g.entry_2plus_postings, g.entry_2plus_share, g.salary_mid_median, c.apps_per_posting_day_24h
+        FROM metrics.group_signals g
+        LEFT JOIN metrics.competitiveness c
+               ON c.week_end_date = g.week_end_date AND c.group_type = g.group_type AND c.group_key = g.group_key
+        WHERE g.week_end_date = %(week)s
+        ORDER BY g.group_type, g.postings DESC
+    """, {"week": week_end_date})
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
 def market_share(week_end_date):
     """MCF share of postings against MOM share of vacancies (both splits) from the week's own snapshot,
     with the gap the week before."""

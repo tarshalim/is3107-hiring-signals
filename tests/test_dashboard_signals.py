@@ -189,6 +189,41 @@ def test_barrier_verdict():
                                          barrier_companies=25), T)
     assert flagged["value"] == "3.6x" and flagged["flagged"] and "31 postings, 25 employers" in flagged["caption"]
     assert "Not enough postings" in logic.barrier_verdict(_row(barrier_lift=None), T)["caption"]
+    # General Ledger on 3 Nov: lift 3.6 but 1.43 times the market's applications per view, so not a barrier
+    gl = logic.barrier_verdict(_row(barrier_lift=3.554, barrier_rate_vs_overall=1.43), T)
+    assert not gl["flagged"] and "1.4x the average posting's applications per view" in gl["caption"]
+    assert "applications per view" not in not_flagged["caption"]       # lift too low: the lift is the reason
+
+
+def test_harder_score_points_the_same_way_for_every_column():
+    """log2 times the market, turned so that above 0 always means harder to fill, capped at +-2."""
+    assert logic.harder_score(0.036, 0.018, True) == pytest.approx(1.0)          # twice the shortage share
+    assert logic.harder_score(0.17, 0.34, False) == pytest.approx(1.0)           # half the applicants: harder
+    assert logic.harder_score(0.80, 0.20, False) == pytest.approx(-2.0)          # 4x the applicants
+    assert logic.harder_score(1.0, 0.01, True) == logic.GRID_CAP                 # capped
+    assert logic.harder_score(0, 0.018, True) == -logic.GRID_CAP                 # no flagged postings at all
+    assert logic.harder_score(0, 0.34, False) == logic.GRID_CAP                  # no applications at all
+    assert all(map(lambda v: v != v, (logic.harder_score(None, 0.1, True), logic.harder_score(0.1, NAN, True))))
+
+
+def test_summary_grid_rows_fewest_applicants_first():
+    overall = pd.Series({"apps_per_posting_day_24h": 0.3451, "shortage_share": 0.018, "barrier_share": 0.0834,
+                         "entry_2plus_share": 0.0626})
+    groups = pd.DataFrame({
+        "group_label": ["Accounting", "Personal Care / Beauty", "Building and Construction"],
+        "apps_per_posting_day_24h": [0.8135, 0.042, 0.148], "shortage_share": [0.0005, 0.0749, 0.024],
+        "barrier_share": [0.1235, 0.0718, 0.0955], "entry_2plus_share": [0.097, 0.119, 0.2935],
+        "postings": [3845, 849, 9596], "direct_postings": [2086, 374, 5961], "entry_postings": [268, 42, 293]})
+    grid = logic.summary_grid(groups, overall)
+    assert grid["rows"]["group_label"].tolist() == ["Personal Care / Beauty", "Building and Construction", "Accounting"]
+    assert grid["text"][0] == ["0.04/day", "7.5%", "7.2%", "11.9%"]
+    assert grid["bases"][0] == [849, 374, 849, 42]
+    # 42 entry-level postings: below GRID_MIN_BASE, so greyed out (no colour), the rest of the row coloured
+    assert logic.GRID_MIN_BASE == 100 and grid["small"][0] == [False, False, False, True]
+    beauty = grid["z"][0]
+    assert beauty[0] == logic.GRID_CAP and beauty[1] == pytest.approx(2.0, abs=0.06) and beauty[3] != beauty[3]
+    assert grid["z"][2][0] < 0                                       # accounting: more applicants than the market
+    assert grid["headers"][1] == "Shortage<br>(all: 1.8%)"
 
 
 def test_competition_verdict_compares_with_the_average_posting():
@@ -245,9 +280,9 @@ def test_weekly_tabs_read_only_the_metrics_schema():
 
 def test_weekly_queries_are_parameterised():
     queries = re.findall(r'run_query\("""(.*?)"""', QUERIES_SRC, re.S)
-    assert len(queries) == 5
+    assert len(queries) == 6
     for sql in queries:
         assert "{" not in sql                                            # no f-string values in the SQL
         assert re.sub(r"%\(\w+\)s", "", sql).count("%") == 0             # no stray % for psycopg2
-    assert sum("%(week)s" in sql for sql in queries) == 4                # every query but the week list
-    assert QUERIES_SRC.count("@st.cache_data(") == 5                     # and every one cached
+    assert sum("%(week)s" in sql for sql in queries) == 5                # every query but the week list
+    assert QUERIES_SRC.count("@st.cache_data(") == 6                     # and every one cached

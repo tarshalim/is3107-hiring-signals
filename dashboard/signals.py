@@ -22,6 +22,8 @@ DEFAULT_THRESHOLDS = {
     "shortage_min_flagged": 25, "shortage_min_reposts": 2, "shortage_max_applications": 2,
     "barrier_min_lift": 1.5, "barrier_min_flagged": 25, "barrier_max_rate_ratio": 0.8,
     "max_top_company_share": 0.5, "entry_min_years": 2,
+    # added 7 Nov 2026: shortage on direct employers only, barrier also below the market's applications per view
+    "agency_ssic_prefix": "78", "barrier_max_rate_vs_overall": 1.0,
 }
 
 # Short names for the MOM groups in running text (metrics.mcf_vs_mom_share.mom_group, both splits)
@@ -169,6 +171,58 @@ def spread(groups: pd.DataFrame, min_postings: int) -> dict | None:
     return {"top": top, "bottom": bottom, "ratio": ratio}
 
 
+# --- summary grid: which cause shows up where -----------------------------------------------------
+
+# (column title, metrics.group_signals column, True when a higher value points to hard to fill, the column
+# counting the postings the value rests on)
+GRID_COLUMNS = (
+    ("Few applicants", "apps_per_posting_day_24h", False, "postings"),
+    ("Shortage", "shortage_share", True, "direct_postings"),
+    ("Barrier", "barrier_share", True, "postings"),
+    ("Entry level asking 2+ years", "entry_2plus_share", True, "entry_postings"),
+)
+GRID_CAP = 2.0          # colour stops at 4 times (log2 = 2) the market either way
+GRID_MIN_BASE = 100     # a cell resting on fewer postings is greyed out, not coloured (e.g. 42 entry-level postings)
+
+
+def harder_score(value, overall, higher_is_harder: bool) -> float:
+    """log2 of how many times the market a group's value is, turned so that above 0 always points to hard to fill
+    (for applications per day, fewer is harder). Capped at +-GRID_CAP; NaN when unknown."""
+    if missing(value) or missing(overall) or not overall:
+        return float("nan")
+    value, overall = float(value), float(overall)
+    if value == 0:      # no flagged postings, or no applications at all: as far as the scale goes
+        return -GRID_CAP if higher_is_harder else GRID_CAP
+    ratio = value / overall if higher_is_harder else overall / value
+    return max(-GRID_CAP, min(GRID_CAP, math.log2(ratio)))
+
+
+def grid_cell_text(column: str, value) -> str:
+    if missing(value):
+        return "n/a"
+    if column == "apps_per_posting_day_24h":
+        return f"{value:.2f}/day"
+    return pct(value)
+
+
+def summary_grid(groups: pd.DataFrame, overall) -> dict:
+    """The summary heatmap for one group type: rows sorted by applications per day (fewest first), with per cell
+    z = harder_score, the value text, the number of postings it rests on (bases) and whether that is below
+    GRID_MIN_BASE (small: shown grey, z NaN), plus the market value of each column for the header."""
+    rows = groups.sort_values("apps_per_posting_day_24h", na_position="last").reset_index(drop=True)
+    z, text, bases, small = [], [], [], []
+    for _, r in rows.iterrows():
+        row_bases = [0 if missing(r[base]) else int(r[base]) for _, _, _, base in GRID_COLUMNS]
+        row_small = [b < GRID_MIN_BASE for b in row_bases]
+        z.append([float("nan") if s else harder_score(r[col], overall[col], harder)
+                  for (_, col, harder, _), s in zip(GRID_COLUMNS, row_small)])
+        text.append([grid_cell_text(col, r[col]) for _, col, _, _ in GRID_COLUMNS])
+        bases.append(row_bases)
+        small.append(row_small)
+    headers = [f"{title}<br>(all: {grid_cell_text(col, overall[col])})" for title, col, _, _ in GRID_COLUMNS]
+    return {"rows": rows, "z": z, "text": text, "bases": bases, "small": small, "headers": headers}
+
+
 # --- market check ---------------------------------------------------------------------------------
 
 def market_rows(market: pd.DataFrame, split: str) -> pd.DataFrame:
@@ -250,11 +304,11 @@ def shortage_verdict(row, t: dict) -> dict:
         return {"value": "No", "delta": None, "flagged": False,
                 "caption": f"Fewer than {t['shortage_min_flagged']} postings reposted {t['shortage_min_reposts']}+ "
                            f"times with at most {t['shortage_max_applications']} applications, from "
-                           f"{t['min_companies']}+ employers."}
+                           f"{t['min_companies']}+ direct employers (agencies left out)."}
     lift = row["shortage_lift"]
-    caption = (f"as likely as the average posting to be reposted {t['shortage_min_reposts']}+ times with at most "
-               f"{t['shortage_max_applications']} applications ({int(row['shortage_postings']):,} postings, "
-               f"{int(row['shortage_companies']):,} employers).")
+    caption = (f"as likely as the average direct employer's posting to be reposted {t['shortage_min_reposts']}+ "
+               f"times with at most {t['shortage_max_applications']} applications "
+               f"({int(row['shortage_postings']):,} postings, {int(row['shortage_companies']):,} employers).")
     if lift < 1:
         caption += " Below 1x: no shortage signal."
     return {"value": times(lift), "delta": None, "flagged": lift >= 1,
@@ -267,10 +321,15 @@ def barrier_verdict(row, t: dict) -> dict:
                 "caption": f"Not enough postings: needs {t['skill_min_postings']}+ open postings from "
                            f"{t['min_companies']}+ employers."}
     if not bool(row.get("is_barrier")):
+        caption = (f"{times(row['barrier_lift'])} as often as similar jobs predict; flagged from "
+                   f"{t['barrier_min_lift']}x with {t['barrier_min_flagged']}+ barrier postings.")
+        rate = row.get("barrier_rate_vs_overall")
+        if (row["barrier_lift"] >= t["barrier_min_lift"] and not missing(rate)
+                and rate >= t["barrier_max_rate_vs_overall"]):
+            caption += (f" Its postings still get {times(rate)} the average posting's applications per view, "
+                        "so people do apply: not a barrier.")
         return {"value": "No", "delta": None, "flagged": False,
-                "caption": f"{times(row['barrier_lift'])} as often as similar jobs predict; flagged from "
-                           f"{t['barrier_min_lift']}x with {t['barrier_min_flagged']}+ barrier postings."
-                           + _was(row.get("is_barrier_prev_week"))}
+                "caption": caption + _was(row.get("is_barrier_prev_week"))}
     return {"value": times(row["barrier_lift"]), "delta": None, "flagged": True,
             "caption": f"as often as similar jobs predict: viewed a lot, then fewer applications per view "
                        f"({int(row['barrier_postings']):,} postings, {int(row['barrier_companies']):,} employers)."

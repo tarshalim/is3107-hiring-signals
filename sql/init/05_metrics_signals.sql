@@ -99,6 +99,8 @@ CREATE TABLE IF NOT EXISTS metrics.posting_week (
                                                     -- per view at most thresholds.barrier_max_rate_ratio x the group's
     is_entry_2plus         BOOLEAN  NOT NULL,       -- "Fresh/entry level" position asking 2+ years
     is_junior_2plus        BOOLEAN  NOT NULL,       -- "Junior Executive" position asking 2+ years (kept apart: a far higher share)
+    posted_by_agency       BOOLEAN  NOT NULL,       -- poster's SSIC starts with thresholds.agency_ssic_prefix (78, employment
+                                                    -- agencies); left out of the shortage signal
     PRIMARY KEY (week_end_date, job_uuid)
 );
 
@@ -134,11 +136,15 @@ CREATE TABLE IF NOT EXISTS metrics.barrier_skill (
     rate_vs_overall     NUMERIC(10,3),              -- apply_rate / overall_apply_rate. 0.6 = 40% fewer applications per view
     is_barrier          BOOLEAN NOT NULL,           -- lift >= thresholds.barrier_min_lift, with barrier_min_flagged barrier
                                                     -- postings from min_companies employers, no one employer above
-                                                    -- max_top_company_share of them
+                                                    -- max_top_company_share of them, and rate_vs_overall below
+                                                    -- barrier_max_rate_vs_overall (fewer applications per view than
+                                                    -- the whole market, not only than similar jobs)
     PRIMARY KEY (week_end_date, skill_ref)
 );
 
 -- Signal 2, skill shortages: which skills sit in postings reposted again and again with few applicants?
+-- Direct employers only: postings by employment agencies (posting_week.posted_by_agency) are left out of every
+-- count and share here, because agencies keep evergreen ads up and repost them.
 CREATE TABLE IF NOT EXISTS metrics.shortage_skill (
     week_end_date          DATE    NOT NULL,
     snapshot_date          DATE    NOT NULL,
@@ -152,7 +158,7 @@ CREATE TABLE IF NOT EXISTS metrics.shortage_skill (
     top_company_share      NUMERIC(6,4),            -- share of the shortage postings from the single biggest employer
                                                     -- (a skill above thresholds.max_top_company_share is not listed)
     shortage_share         NUMERIC(8,4),            -- shortage_postings / postings
-    overall_shortage_share NUMERIC(8,4),            -- the same over all open postings
+    overall_shortage_share NUMERIC(8,4),            -- the same over all open postings by direct employers
     lift                   NUMERIC(10,3),           -- shortage_share / overall_shortage_share. 2 = twice as common as usual
     median_repost_count    NUMERIC(8,1),            -- over the skill's shortage postings only
     median_applications    NUMERIC(10,1),           -- over the skill's shortage postings only
@@ -245,6 +251,30 @@ CREATE TABLE IF NOT EXISTS metrics.skill_salary (
     PRIMARY KEY (week_end_date, skill_ref)
 );
 
+-- Summary by group: one row per job category and SSOC major group (and 'overall'), with the share of each
+-- posting-level flag, so the dashboard can show which cause shows up where. Applications per day for the same
+-- groups are in metrics.competitiveness (same group_type and group_key). Groups below
+-- thresholds.group_min_postings postings are left out; a share whose base is below it is NULL.
+CREATE TABLE IF NOT EXISTS metrics.group_signals (
+    week_end_date          DATE    NOT NULL,
+    snapshot_date          DATE    NOT NULL,
+    group_type             TEXT    NOT NULL,        -- 'overall', 'category', 'ssoc_major_group'
+    group_key              TEXT    NOT NULL,
+    group_label            TEXT,
+    postings               INTEGER NOT NULL,        -- open postings in the group
+    agency_share           NUMERIC(8,4),            -- share posted by employment agencies (posted_by_agency)
+    direct_postings        INTEGER NOT NULL,        -- open postings by direct employers: the shortage base
+    shortage_postings      INTEGER NOT NULL,        -- of those, is_shortage
+    shortage_share         NUMERIC(8,4),            -- shortage_postings / direct_postings
+    barrier_postings       INTEGER NOT NULL,        -- is_barrier_posting (all posters)
+    barrier_share          NUMERIC(8,4),            -- barrier_postings / postings
+    entry_postings         INTEGER NOT NULL,        -- entry-level postings with a usable experience value
+    entry_2plus_postings   INTEGER NOT NULL,        -- of those, is_entry_2plus
+    entry_2plus_share      NUMERIC(8,4),            -- entry_2plus_postings / entry_postings
+    salary_mid_median      NUMERIC(12,2),           -- median monthly midpoint, usable salaries only
+    PRIMARY KEY (week_end_date, group_type, group_key)
+);
+
 -- The MOM validation is metrics.mcf_vs_mom_share (sql/init/03_mom_vacancies.sql), built by the
 -- compare_mcf_with_mom task of the same DAG run from the same snapshot.
 
@@ -280,3 +310,6 @@ ALTER TABLE metrics.shortage_skill ADD COLUMN IF NOT EXISTS top_company_share NU
 ALTER TABLE metrics.posting_week ADD COLUMN IF NOT EXISTS barrier_group TEXT;
 -- skill demand by SkillsFuture skill type, so technical skills can be shown apart
 ALTER TABLE metrics.skill_demand ADD COLUMN IF NOT EXISTS skill_type TEXT;
+-- shortage on direct employers only (thresholds.agency_ssic_prefix); metrics.group_signals is created above
+ALTER TABLE metrics.posting_week ADD COLUMN IF NOT EXISTS posted_by_agency BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE metrics.posting_week ALTER COLUMN posted_by_agency DROP DEFAULT;

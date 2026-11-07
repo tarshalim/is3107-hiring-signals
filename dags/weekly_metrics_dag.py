@@ -9,6 +9,7 @@ wait_for_week_end_snapshot -> pick_snapshot ----+
                                                                      +-> build_competitiveness -----------+
                                                                      +-> build_skill_demand --------------+
                                                                      +-> build_skill_salary --------------+
+                                                                     +-> build_group_signals -------------+
 
 Runs every Tuesday at 14:00 Singapore time. Ingest (10:00) normally finishes by 10:45 and the transform
 soon after, but on 27 and 28 Oct ingest ran until 14:49 and 15:31. So wait_for_week_end_snapshot first
@@ -42,7 +43,7 @@ Design:
     backfilled ones included, compares with the latest MOM quarter available.
   - signals (metrics/): pick_snapshot resolves the week and its snapshot once and records them in
     metrics.run_log (week_end_date = the interval end's Singapore date, snapshot_date = the snapshot
-    used). build_posting_week stores the open postings of the week end, then the six signal tables build
+    used). build_posting_week stores the open postings of the week end, then the seven signal tables build
     in parallel: they read only metrics.posting_week and clean, never each other, so a failure reruns
     only that table. check_and_log runs range checks on the week's rows and fails the run on a 'fail'
     check (the rows stay for inspection, like the transform's data-quality step).

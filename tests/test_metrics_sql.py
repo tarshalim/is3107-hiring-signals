@@ -29,6 +29,7 @@ INSERT_SQL = {
     "competitiveness": build_week.COMPETITIVENESS_SQL,
     "skill_demand": build_week.SKILL_DEMAND_SQL,
     "skill_salary": build_week.SKILL_SALARY_SQL,
+    "group_signals": build_week.GROUP_SIGNALS_SQL,
 }
 
 # The week ending Tue 3 Nov (Wed 28 Oct to Tue 3 Nov), from Tuesday's snapshot
@@ -151,13 +152,48 @@ def test_one_bulk_employer_cannot_make_a_barrier_or_shortage_skill():
     barrier = " ".join(build_week.BARRIER_SQL.split())
     shortage = " ".join(build_week.SHORTAGE_SQL.split())
     assert "WHERE pw.is_barrier_posting GROUP BY ps.skill_ref, pw.company_name" in barrier
-    assert "AND r.top_share <= %(max_top_company_share)s, FALSE)" in barrier
-    assert "WHERE pw.is_shortage GROUP BY ps.skill_ref, pw.company_name" in shortage
+    assert "AND r.top_share <= %(max_top_company_share)s" in barrier
+    assert "WHERE pw.is_shortage AND NOT pw.posted_by_agency GROUP BY ps.skill_ref, pw.company_name" in shortage
     assert shortage.endswith("WHERE t.top_n::numeric / p.shortage_postings <= %(max_top_company_share)s")
     blocks = _table_blocks(SCHEMA)
     assert "top_company_share" in blocks["barrier_skill"] and "top_company_share" in blocks["shortage_skill"]
     for table in ("barrier_skill ", "shortage_skill"):      # the upgrade block adds it to an existing warehouse
         assert f"ALTER TABLE metrics.{table} ADD COLUMN IF NOT EXISTS top_company_share" in SCHEMA
+
+
+def test_shortage_reads_direct_employers_only():
+    """Employment agencies (SSIC 78) posted 42% of open postings but 60% of the shortage postings on 3 Nov: their
+    evergreen ads are reposted with few applicants whatever the market does. They stay in posting_week, flagged."""
+    assert THRESHOLDS["agency_ssic_prefix"] == "78"
+    posting = " ".join(build_week.POSTING_WEEK_SQL.split())
+    assert "starts_with(j.company_ssic_code, %(agency_ssic_prefix)s) IS TRUE" in posting
+    shortage = " ".join(build_week.SHORTAGE_SQL.split())
+    # the baseline, the per-skill counts and the biggest-employer cap all leave agencies out
+    assert "FROM metrics.posting_week WHERE week_end_date = %(e)s AND NOT posted_by_agency" in shortage
+    assert "pw.job_uuid = ps.job_uuid AND NOT pw.posted_by_agency GROUP BY ps.skill_ref" in shortage
+    assert shortage.count("posted_by_agency") == 3
+    assert "posted_by_agency" not in build_week.BARRIER_SQL       # barrier is not inflated by agencies
+    assert "posted_by_agency" in _table_blocks(SCHEMA)["posting_week"]
+    assert "ALTER TABLE metrics.posting_week ADD COLUMN IF NOT EXISTS posted_by_agency" in SCHEMA
+
+
+def test_a_barrier_skill_also_converts_below_the_whole_market():
+    """Accounting skills were barriers only next to clerical jobs, the most applied-to group: their postings got
+    more applications per view than the market. A barrier skill now needs rate_vs_overall below 1 too."""
+    assert THRESHOLDS["barrier_max_rate_vs_overall"] == 1.0
+    barrier = " ".join(build_week.BARRIER_SQL.split())
+    assert "AND r.rate / NULLIF(o.apply_rate, 0) < %(barrier_max_rate_vs_overall)s, FALSE)" in barrier
+
+
+def test_group_signals_shares_have_the_same_bases_as_the_signal_tables():
+    sql = " ".join(build_week.GROUP_SIGNALS_SQL.split())
+    assert "count(*) FILTER (WHERE is_shortage AND NOT posted_by_agency) AS shortage_postings" in sql
+    assert "round(shortage_postings::numeric / direct_postings, 4)" in sql
+    # the entry-level base is the one unrealistic_requirements uses
+    assert ("(pw.position_level = ANY(%(entry_levels)s) AND NOT pw.exp_out_of_range "
+            "AND pw.min_years_exp <= %(exp_max_valid)s) IS TRUE AS is_entry") in sql
+    assert "WHERE group_type = 'overall' OR postings >= %(group_min_postings)s" in sql
+    assert re.search(r"PRIMARY KEY \(week_end_date, group_type, group_key\)", _table_blocks(SCHEMA)["group_signals"])
 
 
 def test_barrier_compares_within_2_digit_ssoc_groups_with_a_1_digit_fallback():

@@ -28,6 +28,7 @@ def render(week):
     unreal = sq.unrealistic(end)
     comp = sq.competitiveness(end)
     market = sq.market_share(end)
+    groups = sq.group_signals(end)
     if skills.empty and unreal.empty and comp.empty:
         st.info("This week has no signal rows. Check the weekly_metrics run on the Pipeline health tab.")
         return
@@ -37,6 +38,7 @@ def render(week):
 
     _headline(shortage, barrier, unreal, comp, market, t)
     st.divider()
+    _summary(groups, t)
     _shortage(shortage, labels, t)
     _barrier(barrier, labels, t)
     _unrealistic(unreal, t)
@@ -60,8 +62,9 @@ def _headline(shortage, barrier, unreal, comp, market, t):
         share = shortage["overall_shortage_share"].iloc[0] if not shortage.empty else None
         st.metric("Shortage", logic.pct(share),
                   help=f"Open postings reposted {t['shortage_min_reposts']}+ times that still have at most "
-                       f"{t['shortage_max_applications']} applications, as a share of all open postings.")
-        text = (f"of open postings are reposted {t['shortage_min_reposts']}+ times with at most "
+                       f"{t['shortage_max_applications']} applications, as a share of open postings by direct "
+                       "employers. Employment agencies are left out: they keep evergreen ads up and repost them.")
+        text = (f"of direct employers' postings are reposted {t['shortage_min_reposts']}+ times with at most "
                 f"{t['shortage_max_applications']} applications.")
         if not shortage.empty:
             kept = logic.carried_over(shortage)
@@ -71,7 +74,8 @@ def _headline(shortage, barrier, unreal, comp, market, t):
     with b.container(border=True):
         st.metric("Barrier", f"{len(barrier):,} skills",
                   help=f"Skills whose postings are {t['barrier_min_lift']}+ times as likely as similar jobs to be "
-                       "among the most viewed while getting fewer applications per view.")
+                       "among the most viewed while getting fewer applications per view, and that get fewer "
+                       "applications per view than the average posting too.")
         text = "whose postings people view, then apply to less than similar jobs."
         if not barrier.empty:
             kept = logic.carried_over(barrier)
@@ -119,6 +123,78 @@ def _gap_text(row, short: bool = False) -> str:
             f"{logic.money(row['other_salary_mid_median'])} median)")
 
 
+# --- summary grid ---------------------------------------------------------------------------------
+
+GRID_SCALE = [[0.0, "#4f8fdc"], [0.5, "#f0efec"], [1.0, "#e0675a"]]   # blue below the market, grey same, red above
+GRID_TICKS = {-2: "1/4", -1: "1/2", 0: "same", 1: "2x", 2: "4x"}
+GRID_ROWS = {"category": "Job category", "ssoc_major_group": "Occupation group (SSOC)"}
+GRID_MIN_POSTINGS = 500       # job categories shown; smaller ones are noisy and make the grid too tall
+GRID_TOO_FEW = "#e6e5e1"      # cells resting on fewer than logic.GRID_MIN_BASE postings
+
+
+def _summary(groups, t):
+    st.markdown("#### Which cause shows up where?")
+    st.caption("Each cell compares a group with all open postings. **Red points to hard to fill** (fewer applicants, "
+               "or more of the flag than the market), blue to the opposite, grey is about the same. The number is "
+               "the group's own value, with the postings it rests on below it. Grey cells rest on fewer than "
+               f"{logic.GRID_MIN_BASE} postings: too few to read. Read across a row to see which causes a group "
+               "shows; rows with the fewest applicants come first.")
+    if groups.empty or (groups["group_type"] == "overall").sum() == 0:
+        st.info("No summary rows this week. Rerun the weekly_metrics DAG to build metrics.group_signals.")
+        return
+    overall = groups[groups["group_type"] == "overall"].iloc[0]
+    kind = st.radio("Rows", list(GRID_ROWS), format_func=GRID_ROWS.get, horizontal=True, key="signals_grid_rows")
+    rows = groups[groups["group_type"] == kind]
+    if kind == "category":
+        rows = rows[rows["postings"] >= GRID_MIN_POSTINGS]
+    if rows.empty:
+        st.info("No group has enough postings.")
+        return
+    st.plotly_chart(_summary_figure(rows, overall), width="stretch")
+    st.caption(f"Few applicants: applications per open posting per day (red = fewer than all postings). Shortage: "
+               f"share of direct employers' postings reposted {t['shortage_min_reposts']}+ times with at most "
+               f"{t['shortage_max_applications']} applications. Barrier: share of postings among the most viewed of "
+               f"their occupation that get few applications per view. Entry level asking 2+ years: share of entry-level "
+               f"postings. n/a: fewer than {t['group_min_postings']} postings under the share."
+               + (f" Job categories with {GRID_MIN_POSTINGS:,}+ open postings." if kind == "category" else ""))
+
+
+def _summary_figure(rows, overall):
+    grid = logic.summary_grid(rows, overall)
+    shown = grid["rows"]
+    labels = [logic.short_label(lab, 34) for lab in shown["group_label"]]
+    hover = [[f"{lab}<br>{title}: {grid['text'][i][j]}, from {grid['bases'][i][j]:,} postings"
+              + (f" (under {logic.GRID_MIN_BASE}: too few to read)" if grid["small"][i][j] else "")
+              + f"<br>{shown.at[i, 'postings']:,} open postings, {logic.pct(shown.at[i, 'agency_share'], 0)} by "
+              f"agencies<br>Median pay {logic.money(shown.at[i, 'salary_mid_median'])} "
+              f"(all: {logic.money(overall['salary_mid_median'])})"
+              for j, (title, _, _, _) in enumerate(logic.GRID_COLUMNS)] for i, lab in enumerate(shown["group_label"])]
+
+    def cells(small: bool):
+        """Cell text (value, then the postings it rests on) for the coloured cells or for the grey ones."""
+        return [[f"{t}<br><span style='font-size:10px'>{b:,} postings</span>" if s == small else ""
+                 for t, b, s in zip(text_row, base_row, small_row)]
+                for text_row, base_row, small_row in zip(grid["text"], grid["bases"], grid["small"])]
+
+    common = dict(x=grid["headers"], y=labels, texttemplate="%{text}", customdata=hover,
+                  hovertemplate="%{customdata}<extra></extra>", xgap=2, ygap=2)
+    fig = go.Figure(go.Heatmap(
+        z=grid["z"], text=cells(False), textfont=dict(size=12, color="#0b0b0b"),
+        colorscale=GRID_SCALE, zmin=-logic.GRID_CAP, zmax=logic.GRID_CAP,
+        colorbar=dict(title=dict(text="vs all postings", side="right"), tickvals=list(GRID_TICKS),
+                      ticktext=list(GRID_TICKS.values()), thickness=12, len=0.6), **common))
+    # cells on too few postings: a flat grey layer with muted text, outside the colour scale
+    fig.add_trace(go.Heatmap(
+        z=[[1 if s else None for s in row] for row in grid["small"]], text=cells(True),
+        textfont=dict(size=12, color="#8a8984"), colorscale=[[0, GRID_TOO_FEW], [1, GRID_TOO_FEW]],
+        showscale=False, **common))
+    fig.update_yaxes(autorange="reversed", automargin=True, ticksuffix="  ")   # first row (fewest applicants) on top
+    fig.update_xaxes(side="top", automargin=True)
+    fig.update_layout(height=max(360, 40 * len(shown) + 120), margin=dict(t=70, b=20, l=10, r=10),
+                      plot_bgcolor="rgba(0,0,0,0)")
+    return fig
+
+
 # --- shortage and barrier -------------------------------------------------------------------------
 
 def _lift_chart(rows, labels: dict, lift_col: str, n_col: str, firms_col: str, x_title: str, ref_text: str,
@@ -155,7 +231,9 @@ def _shortage(rows, labels: dict, t):
     st.caption(f"How many times more likely a skill's postings are than the average posting to be reposted "
                f"{t['shortage_min_reposts']}+ times with at most {t['shortage_max_applications']} applications. "
                f"Skills need {t['shortage_min_flagged']}+ such postings from {t['min_companies']}+ employers, with "
-               f"no employer behind more than {t['max_top_company_share']:.0%} of them.")
+               f"no employer behind more than {t['max_top_company_share']:.0%} of them. Direct employers only: "
+               f"employment agencies (SSIC {t['agency_ssic_prefix']}) keep evergreen ads up and repost them, so their "
+               "postings are left out.")
     if rows.empty:
         st.info("No skill meets the shortage minimums this week.")
         return
@@ -173,7 +251,8 @@ def _barrier(rows, labels: dict, t):
     st.caption(f"How many times more likely a skill's postings are than similar jobs (same SSOC group) to be in "
                f"the most-viewed quarter while getting at most {t['barrier_max_rate_ratio']} times the group's "
                f"applications per view. Flagged from {t['barrier_min_lift']}x with {t['barrier_min_flagged']}+ "
-               f"such postings from {t['min_companies']}+ employers. Moves more week to week than shortage.")
+               f"such postings from {t['min_companies']}+ employers, and only if the skill's postings also get fewer "
+               "applications per view than the average posting. Moves more week to week than shortage.")
     if rows.empty:
         st.info("No skill is flagged as a barrier skill this week.")
         return

@@ -102,7 +102,10 @@ SELECT s.week_end_date,
        c.apps_per_posting_day_24h,
        c.median_apps_per_day_since_posting,
        o.apps_per_posting_day_24h  AS overall_apps_per_posting_day_24h,
-       pc.apps_per_posting_day_24h AS apps_per_posting_day_24h_prev_week
+       pc.apps_per_posting_day_24h AS apps_per_posting_day_24h_prev_week,
+       -- added last (a replaced view can only gain columns at the end): applications per view against all
+       -- postings, which a barrier skill must keep below thresholds.barrier_max_rate_vs_overall
+       b.rate_vs_overall    AS barrier_rate_vs_overall
 FROM skills s
 JOIN metrics.signal_weeks w ON w.week_end_date = s.week_end_date
 LEFT JOIN metrics.barrier_skill b   ON b.week_end_date = s.week_end_date AND b.skill_ref = s.skill_ref
