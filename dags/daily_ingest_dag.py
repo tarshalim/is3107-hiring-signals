@@ -110,7 +110,7 @@ def daily_mcf_ingest():
         conn = PostgresHook(postgres_conn_id="warehouse").get_conn()
         try:
             if not drift_tables_ready(conn):
-                raise AirflowSkipException("ops.schema_fields is missing: apply sql/init/10_ops_schema_fields.sql")
+                raise AirflowSkipException("ops.schema_fields is missing: apply sql/init/11_ops_schema_fields.sql")
             fields, read = field_stats(read_snapshot(Path(stats["path"])), limit=DRIFT_SAMPLE)
             out = record_schema_drift(conn, stats["snapshot_date"], fields, read)
         finally:

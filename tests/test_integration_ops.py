@@ -21,7 +21,7 @@ DSN = os.environ.get("WAREHOUSE_TEST_DSN")
 pytestmark = pytest.mark.skipif(not DSN, reason="set WAREHOUSE_TEST_DSN to run against a Postgres warehouse")
 REPO = Path(__file__).resolve().parent.parent
 TEST_DB = "is3107_test_ops"
-NEW_FILES = ["09_ops_alerts.sql", "10_ops_schema_fields.sql", "11_ops_lake_exports.sql"]
+NEW_FILES = ["09_ops_alerts.sql", "11_ops_schema_fields.sql", "12_ops_lake_exports.sql"]
 
 
 def _test_dsn():

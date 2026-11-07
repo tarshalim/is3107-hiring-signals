@@ -13,9 +13,11 @@ live poll.
 ```bash
 git pull
 docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/09_ops_alerts.sql
-docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/10_ops_schema_fields.sql
-docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/11_ops_lake_exports.sql
+docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/11_ops_schema_fields.sql
+docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/12_ops_lake_exports.sql
 ```
+
+(`10_dashboard_signals.sql` belongs to the dashboard's signal tabs and has its own step in `docs/dashboard-signals.md`.)
 
 Windows PowerShell, for each file:
 `Get-Content sql/init/09_ops_alerts.sql | docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'`

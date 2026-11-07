@@ -2,7 +2,7 @@
 
 Written Fri 6 Nov 2026. Code: `dags/common/alerts.py`, `sql/init/09_ops_alerts.sql`, the "Alerts and retries" part
 of `dashboard/tabs/pipeline.py`; schema drift (section 7): `quality/snapshot_checks.py`, the ingest DAG's
-`check_schema_drift` task, `sql/init/10_ops_schema_fields.sql`. Tests: `tests/test_alerts.py`,
+`check_schema_drift` task, `sql/init/11_ops_schema_fields.sql`. Tests: `tests/test_alerts.py`,
 `tests/test_snapshot_checks.py`, `tests/test_integration_ops.py`.
 
 ## 1. What it does
@@ -150,9 +150,9 @@ python -m quality.snapshot_checks "data/raw/mcf/*.jsonl.gz"      # WAREHOUSE_* f
 
 ```bash
 git pull
-docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/10_ops_schema_fields.sql
+docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/11_ops_schema_fields.sql
 # Windows PowerShell:
-Get-Content sql/init/10_ops_schema_fields.sql | docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+Get-Content sql/init/11_ops_schema_fields.sql | docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 # optional, fill the history from the saved files (on the laptop, with the warehouse on port 5433):
 python -m quality.snapshot_checks "data/raw/mcf/*.jsonl.gz"
 # check

@@ -15,7 +15,7 @@ format Spark, pandas and DuckDB all read. Postgres stays the system of record an
 Idempotent (wk7 [056]): a partition is written to a hidden temporary file in its folder and renamed over
 part-0.parquet in one step (os.replace), so a rerun overwrites the day and a reader never sees half a file. Files
 starting with '.' or '_' are ignored by Spark and pyarrow. A day with no rows in clean has its partition removed,
-so the lake mirrors clean. The export log goes to ops.lake_exports (sql/init/11_ops_lake_exports.sql).
+so the lake mirrors clean. The export log goes to ops.lake_exports (sql/init/12_ops_lake_exports.sql).
 
     python -m transform.lake_export --date 2026-10-24 --date 2026-10-25     # chosen days
     python -m transform.lake_export --all                                     # every day in clean.fact_job_day
@@ -177,7 +177,7 @@ def _log(conn, dataset, partition_key, rows, nbytes, seconds, path):
     with conn, conn.cursor() as cur:
         cur.execute("SELECT to_regclass('ops.lake_exports') IS NOT NULL")
         if not cur.fetchone()[0]:
-            return False                 # 11_ops_lake_exports.sql not applied: the files are still written
+            return False                 # 12_ops_lake_exports.sql not applied: the files are still written
         cur.execute("""
             INSERT INTO ops.lake_exports (dataset, partition_key, rows, bytes, seconds, path)
             VALUES (%s, %s, %s, %s, %s, %s)

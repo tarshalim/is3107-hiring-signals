@@ -137,7 +137,7 @@ def drift_result(previous: dict | None, current: dict, previous_date=None) -> Re
 
 
 def drift_tables_ready(conn) -> bool:
-    """False on a warehouse where sql/init/10_ops_schema_fields.sql has not been applied yet."""
+    """False on a warehouse where sql/init/11_ops_schema_fields.sql has not been applied yet."""
     with conn.cursor() as cur:
         cur.execute("SELECT to_regclass('ops.schema_fields') IS NOT NULL "
                     "AND to_regclass('clean.dq_results') IS NOT NULL")
@@ -199,7 +199,7 @@ def main(argv=None):
     conn = connect()
     try:
         if not drift_tables_ready(conn):
-            raise SystemExit("ops.schema_fields is missing: apply sql/init/10_ops_schema_fields.sql first")
+            raise SystemExit("ops.schema_fields is missing: apply sql/init/11_ops_schema_fields.sql first")
         files = {Path(f) for pattern in args.paths for f in (glob.glob(pattern) or [pattern])}
         for path in sorted(files, key=lambda p: p.name):
             stats, n = field_stats(read_snapshot(path))

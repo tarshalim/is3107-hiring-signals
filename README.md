@@ -245,7 +245,7 @@ Get-Content sql/init/04_ext_schema.sql | docker compose exec -T warehouse sh -c 
 - **Scale, cost and restore**: `python -m ops.scale_report` (one-year projection, timed restore of a day from its
   gz file). `docs/scale-and-cost.md`
 
-On an existing warehouse apply `sql/init/09_ops_alerts.sql`, `10_ops_schema_fields.sql` and `11_ops_lake_exports.sql`
+On an existing warehouse apply `sql/init/09_ops_alerts.sql`, `11_ops_schema_fields.sql` and `12_ops_lake_exports.sql`
 once (safe to run twice), then `docker compose build` and `docker compose up -d`. Step by step for the collector
 laptop: `docs/deploy-eng-improvements.md`.
 

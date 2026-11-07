@@ -5,7 +5,7 @@
 -- Grain: ONE ROW = ONE FIELD PATH SEEN IN ONE DAY'S SNAPSHOT. Rewritten per (source, snapshot_date)
 -- (delete-then-insert), so rerunning a day replaces its rows. About 150 rows a day.
 --
--- This file is idempotent (IF NOT EXISTS). It runs on first container start after 01 to 09 (it needs
+-- This file is idempotent (IF NOT EXISTS). It runs on first container start after 01 to 10 (it needs
 -- clean.dq_results from 02). On an existing warehouse apply it by hand; until then the task is skipped.
 
 CREATE SCHEMA IF NOT EXISTS ops;

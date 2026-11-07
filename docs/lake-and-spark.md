@@ -1,7 +1,7 @@
 # Columnar lake and Spark, with numbers
 
 Written Fri 6 Nov 2026. Code: `transform/lake_export.py`, `dags/weekly_lake_export_dag.py`,
-`sql/init/11_ops_lake_exports.sql`, `spark/skill_demand.py`, `spark/benchmark.py`, the `spark` service in
+`sql/init/12_ops_lake_exports.sql`, `spark/skill_demand.py`, `spark/benchmark.py`, the `spark` service in
 `docker-compose.yml`. Tests: `tests/test_lake_export.py`, `tests/test_integration_ops.py`.
 
 **Which data the numbers come from.** Section 4 is measured on the **real** snapshots of 24 and 25 Oct 2026
@@ -71,7 +71,7 @@ clean star (Postgres) --weekly_lake_export--> data/lake/fact_job_day/snapshot_da
 
 ```bash
 # 0. once: the export log table (safe to run twice) and the Spark image (about 540 MB)
-docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/11_ops_lake_exports.sql
+docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < sql/init/12_ops_lake_exports.sql
 docker pull apache/spark:3.5.7-python3
 # 1. build the lake: unpause weekly_lake_export (it backfills every week), or from the laptop:
 python -m transform.lake_export --all                  # every day in clean; --date YYYY-MM-DD for one day
@@ -85,7 +85,7 @@ Memory: the export is a few tens of MB; the Spark container is capped at 2 GB (l
 and removed when it finishes. Check free memory before step 2 on the collector laptop, or run steps 2 and 3 on
 another laptop with a copy of `data/lake/` (about 7 MB a day).
 
-PowerShell: the same commands, with `Get-Content sql/init/11_ops_lake_exports.sql | docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'` for step 0.
+PowerShell: the same commands, with `Get-Content sql/init/12_ops_lake_exports.sql | docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'` for step 0.
 
 ## 4. Measured on the real snapshots (24 and 25 Oct 2026)
 
@@ -160,7 +160,7 @@ justification with numbers that "no Spark in the daily path" needed.
 
 Additive: a new SQL file, a new paused DAG and an optional compose service. Nothing that runs today changes.
 
-1. `git pull`, then apply `sql/init/11_ops_lake_exports.sql` (step 0 of the runbook).
+1. `git pull`, then apply `sql/init/12_ops_lake_exports.sql` (step 0 of the runbook).
 2. The DAG needs pyarrow, which the base Airflow image already has (19.0.0), so it works with or without the new
    image from `docs/docker-images.md`.
 3. Unpause `weekly_lake_export` when convenient (`docker compose exec airflow-scheduler airflow dags unpause
