@@ -63,14 +63,55 @@ None of them appears in `data/reference/skill_aliases.csv`.
 | Structural | 236 |
 | Painting | 175 |
 
-## Effect on the week ending 3 Nov
+## Effect (measured after the rebuild of 8 Nov)
 
-| List | Before | Expected after | Tags that drop out |
+Both weeks were rebuilt from `main` (commit `778014b`) with all checks passing; each run records the 15 tags in
+`run_log.thresholds.generic_skill_tags`.
+
+| Week ending | Shortage skills (before -> after) | Barrier skills (before -> after) |
+|---|---|---|
+| 27 Oct | 53 -> 47 | 59 -> 58 |
+| 3 Nov | 41 -> 34 | 43 -> 41 |
+
+For 3 Nov the tags that dropped out are Cuts, Disposition, Treatment, Healthcare, Manufacturing, Drawing and
+Construction from shortage, and Painting and Structural from barrier, as expected. Electrical stays on the
+shortage list. The other skills keep the same numbers: each skill is computed on its own, and no postings are
+removed.
+
+### New top 10 shortage skills, week ending 3 Nov
+
+Direct employers only, generic tags excluded.
+
+| # | Skill | Lift | Shortage postings | Employers | Biggest employer's share |
+|---|---|---|---|---|---|
+| 1 | Spa | 4.4x | 26 | 16 | 12% |
+| 2 | Tendering | 3.0x | 26 | 26 | 4% |
+| 3 | Adaptability | 2.6x | 62 | 17 | 34% |
+| 4 | Quantity Surveying | 2.4x | 33 | 33 | 3% |
+| 5 | Cost Control | 2.1x | 36 | 31 | 8% |
+| 6 | Customer Orientation | 2.1x | 351 | 114 | 31% |
+| 7 | Supplier Sourcing | 1.8x | 32 | 28 | 9% |
+| 8 | Technical Drawing | 1.8x | 74 | 60 | 7% |
+| 9 | Developing People | 1.7x | 224 | 68 | 39% |
+| 10 | Civil Engineering | 1.7x | 64 | 54 | 5% |
+
+How to read it:
+
+- **Spa is first on only 26 shortage postings**, just over the minimum of 25, so it is a weak first place.
+- **Construction and cost skills are half the list** (Tendering, Quantity Surveying, Cost Control, Technical
+  Drawing, Civil Engineering), each spread over many employers (biggest employer 3% to 8%): the strongest
+  shortage story.
+- **Three soft skills are in the top 10** (Adaptability, Customer Orientation, Developing People). They are broad,
+  and one employer is behind 31% to 39% of their shortage postings. Showing technical skills apart on the shortage
+  chart would keep them from crowding out the sector story (see "Left off on purpose").
+
+### Unrealistic requirements, week ending 3 Nov (same rebuild)
+
+| Flag | Share | Postings | Median pay, flagged vs others |
 |---|---|---|---|
-| Shortage skills | 41 | 34 | Cuts, Disposition, Treatment, Healthcare, Manufacturing, Drawing, Construction |
-| Barrier skills | 43 | 41 | Painting, Structural |
-
-The other skills keep the same numbers: each skill is computed on its own, and no postings are removed.
+| Entry level asking 2+ years (lead) | 6.3% | 914 of 14,611 | $3,445 vs $3,400 (+1%) |
+| Junior Executive asking 2+ years | 47% | 4,386 of 9,416 | $3,800 vs $3,150 (+21%) |
+| Reposted despite many applicants (minor, direct employers only) | 1.0% | 527 of 50,496 | $4,600 vs $4,000 |
 
 ## Left off on purpose
 
