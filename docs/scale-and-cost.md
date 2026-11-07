@@ -111,13 +111,13 @@ Left out as not run times (over a day, logged before the 30 Oct fix): {'dag_run'
 | daily_mcf_ingest | check_snapshot | 16 | 16 | 0.5 | 3.1 | 0 | 0 |
 | daily_mcf_ingest | fetch_snapshot | 16 | 16 | 1571.6 | 4830.0 | 4 | 0 |
 | daily_mcf_ingest | load_raw | 16 | 16 | 72.0 | 229.7 | 0 | 0 |
-| daily_mcf_transform | load_reference_tables | 12 | 8 | 2.8 | 28.9 | 0 | 0 |
-| daily_mcf_transform | log_run_stats | 12 | 8 | 4.9 | 13.0 | 0 | 0 |
+| daily_mcf_transform | load_reference_tables | 12 | 12 (8 timed) | 2.8 | 28.9 | 0 | 0 |
+| daily_mcf_transform | log_run_stats | 12 | 12 (8 timed) | 4.9 | 13.0 | 0 | 0 |
 | daily_mcf_transform | refresh_dashboard_marts | 2 | 2 | 83.2 | 88.6 | 0 | 0 |
-| daily_mcf_transform | run_quality_checks | 12 | 8 | 9.2 | 26.1 | 0 | 0 |
+| daily_mcf_transform | run_quality_checks | 12 | 12 (8 timed) | 9.2 | 26.1 | 0 | 0 |
 | daily_mcf_transform | train_salary_model | 2 | 2 | 15.6 | 19.1 | 0 | 0 |
-| daily_mcf_transform | transform_snapshot_task | 12 | 8 | 66.2 | 239.5 | 0 | 0 |
-| daily_mcf_transform | wait_for_raw | 12 | 8 | 0.3 | 1.3 | 0 | 0 |
+| daily_mcf_transform | transform_snapshot_task | 12 | 12 (8 timed) | 66.2 | 239.5 | 0 | 0 |
+| daily_mcf_transform | wait_for_raw | 12 | 12 (8 timed) | 0.3 | 1.3 | 0 | 0 |
 | mcf_live_poll | check_poll | 59 | 46 | 0.3 | 1.5 | 0 | 0 |
 | mcf_live_poll | daily_ingest_not_running | 59 | 56 | 0.4 | 17406.6 | 0 | 0 |
 | mcf_live_poll | fetch_newest | 59 | 46 | 5.5 | 1182.8 | 1 | 0 |
