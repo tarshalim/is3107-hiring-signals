@@ -187,7 +187,7 @@ def test_shortage_verdict():
     low = logic.shortage_verdict(_row(shortage_lift=0.49), T)
     assert not low["flagged"] and "Below 1x" in low["caption"]
     none = logic.shortage_verdict(_row(shortage_listed=False), T)
-    assert none["value"] == "No" and "Fewer than 25 postings" in none["caption"]
+    assert none["value"] == "No" and "needs 1.5x" in none["caption"] and "25+ such postings" in none["caption"]
     first = logic.shortage_verdict(_row(shortage_listed_prev_week=None), T)
     assert "last week" not in first["caption"]
 

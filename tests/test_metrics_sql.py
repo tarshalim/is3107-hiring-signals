@@ -208,11 +208,19 @@ def test_one_bulk_employer_cannot_make_a_barrier_or_shortage_skill():
     assert "WHERE pw.is_barrier_posting GROUP BY ps.skill_ref, pw.company_name" in barrier
     assert "AND r.top_share <= %(max_top_company_share)s" in barrier
     assert "WHERE pw.is_shortage AND NOT pw.posted_by_agency GROUP BY ps.skill_ref, pw.company_name" in shortage
-    assert shortage.endswith("WHERE t.top_n::numeric / p.shortage_postings <= %(max_top_company_share)s")
+    assert "WHERE t.top_n::numeric / p.shortage_postings <= %(max_top_company_share)s AND" in shortage
     blocks = _table_blocks(SCHEMA)
     assert "top_company_share" in blocks["barrier_skill"] and "top_company_share" in blocks["shortage_skill"]
     for table in ("barrier_skill ", "shortage_skill"):      # the upgrade block adds it to an existing warehouse
         assert f"ALTER TABLE metrics.{table} ADD COLUMN IF NOT EXISTS top_company_share" in SCHEMA
+
+
+def test_a_shortage_skill_needs_the_same_minimum_lift_as_a_barrier_skill():
+    """8 Nov check: 20 of the 34 listed shortage skills were under 1.5x, the lowest 0.86x."""
+    assert THRESHOLDS["shortage_min_lift"] == THRESHOLDS["barrier_min_lift"] == 1.5
+    shortage = " ".join(build_week.SHORTAGE_SQL.split())
+    assert shortage.endswith("AND (p.shortage_postings::numeric / p.postings) / NULLIF(o.share, 0) "
+                             ">= %(shortage_min_lift)s")
 
 
 def test_shortage_reads_direct_employers_only():

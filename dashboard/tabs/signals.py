@@ -242,7 +242,8 @@ def _shortage(rows, labels: dict, t):
     st.markdown("#### 1. Shortage: employers repost, nobody applies")
     st.caption(f"How many times more likely a skill's postings are than the average posting to be reposted "
                f"{t['shortage_min_reposts']}+ times with at most {t['shortage_max_applications']} applications. "
-               f"Skills need {t['shortage_min_flagged']}+ such postings from {t['min_companies']}+ employers, with "
+               f"Listed from {t['shortage_min_lift']}x, with {t['shortage_min_flagged']}+ such postings from "
+               f"{t['min_companies']}+ employers, with "
                f"no employer behind more than {t['max_top_company_share']:.0%} of them. Direct employers only: "
                f"employment agencies (SSIC {t['agency_ssic_prefix']}) keep evergreen ads up and repost them, so their "
                "postings are left out.")

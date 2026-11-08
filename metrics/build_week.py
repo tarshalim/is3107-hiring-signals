@@ -118,6 +118,9 @@ THRESHOLDS = {
     "shortage_min_reposts": 2,
     "shortage_max_applications": 2,
     "shortage_min_flagged": 25,      # flagged postings carrying the skill
+    "shortage_min_lift": 1.5,        # listed only at 1.5 times the direct employers' shortage share or more, as for
+                                     # barrier (8 Nov check: 20 of the 34 listed skills were under 1.5x, the lowest
+                                     # 0.86x, i.e. less likely than the average posting)
     # unrealistic requirements
     # "reposted" here is once or more, against twice for shortage: a posting reposted even once although it was
     # already drawing many applications is the odd case; shortage needs the stronger "again and again"
@@ -405,8 +408,10 @@ FROM per_skill p
 JOIN top_company t ON t.skill_ref = p.skill_ref
 CROSS JOIN overall o
 JOIN skill_names n ON n.skill_ref = p.skill_ref
--- a skill is listed (flagged) only if no single employer posts more than max_top_company_share of its shortage postings
+-- a skill is listed (flagged) only if no single employer posts more than max_top_company_share of its shortage postings,
+-- and its shortage share is at least shortage_min_lift times the direct employers' share
 WHERE t.top_n::numeric / p.shortage_postings <= %(max_top_company_share)s
+  AND (p.shortage_postings::numeric / p.postings) / NULLIF(o.share, 0) >= %(shortage_min_lift)s
 """
 
 # ---------------------------------------------------------------------------------------------

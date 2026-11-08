@@ -78,7 +78,7 @@ SELECT s.week_end_date,
        sa.salary_mid_median,
        sa.salary_mid_p75,
        sa.mid_vs_overall    AS salary_vs_overall,
-       -- shortage: listed = 25+ shortage postings from 10+ employers, no employer above half of them
+       -- shortage: listed = lift 1.5+, 25+ shortage postings from 10+ employers, no employer above half of them
        sh.skill_ref IS NOT NULL AS shortage_listed,
        sh.shortage_postings,
        sh.shortage_companies,

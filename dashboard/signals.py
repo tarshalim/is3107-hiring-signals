@@ -24,6 +24,8 @@ DEFAULT_THRESHOLDS = {
     "max_top_company_share": 0.5, "entry_min_years": 2,
     # added 7 Nov 2026: shortage on direct employers only, barrier also below the market's applications per view
     "agency_ssic_prefix": "78", "barrier_max_rate_vs_overall": 1.0,
+    # added 8 Nov 2026: a shortage skill needs the same minimum lift as a barrier skill
+    "shortage_min_lift": 1.5,
 }
 
 # Short names for the MOM groups in running text (metrics.mcf_vs_mom_share.mom_group, both splits)
@@ -328,9 +330,10 @@ def _was(flag_prev_week) -> str:
 def shortage_verdict(row, t: dict) -> dict:
     if not bool(row.get("shortage_listed")):
         return {"value": "No", "delta": None, "flagged": False,
-                "caption": f"Fewer than {t['shortage_min_flagged']} postings reposted {t['shortage_min_reposts']}+ "
-                           f"times with at most {t['shortage_max_applications']} applications, from "
-                           f"{t['min_companies']}+ direct employers (agencies left out)."}
+                "caption": f"Not listed: a shortage skill needs {t['shortage_min_lift']}x the average direct "
+                           f"employer's share of postings reposted {t['shortage_min_reposts']}+ times with at most "
+                           f"{t['shortage_max_applications']} applications, with {t['shortage_min_flagged']}+ such "
+                           f"postings from {t['min_companies']}+ direct employers (agencies left out)."}
     lift = row["shortage_lift"]
     caption = (f"as likely as the average direct employer's posting to be reposted {t['shortage_min_reposts']}+ "
                f"times with at most {t['shortage_max_applications']} applications "
