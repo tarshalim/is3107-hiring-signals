@@ -138,19 +138,19 @@ def _gap_text(row, short: bool = False) -> str:
 # --- summary grid ---------------------------------------------------------------------------------
 
 GRID_SCALE = [[0.0, "#4f8fdc"], [0.5, "#f0efec"], [1.0, "#e0675a"]]   # blue below the market, grey same, red above
-GRID_TICKS = {-2: "1/4", -1: "1/2", 0: "same", 1: "2x", 2: "4x"}
+GRID_TICKS = {-2: "1/4 (easier)", -1: "1/2", 0: "same", 1: "2x", 2: "4x (harder)"}
 GRID_ROWS = {"category": "Job category", "ssoc_major_group": "Occupation group (SSOC)"}
 GRID_MIN_POSTINGS = 500       # job categories shown; smaller ones are noisy and make the grid too tall
-GRID_TOO_FEW = "#e6e5e1"      # cells resting on fewer than logic.GRID_MIN_BASE postings
+GRID_TOO_FEW = "#8a8984"      # muted text and legend outline for cells on fewer than logic.GRID_MIN_BASE postings
 
 
 def _summary(groups, t):
     st.markdown("#### Which cause shows up where?")
     st.caption("Each cell compares a group with all open postings. **Red points to hard to fill** (fewer applicants, "
-               "or more of the flag than the market), blue to the opposite, grey is about the same. The number is "
-               "the group's own value, with the postings it rests on below it. Grey cells rest on fewer than "
-               f"{logic.GRID_MIN_BASE} postings: too few to read. Read across a row to see which causes a group "
-               "shows; rows with the fewest applicants come first.")
+               "or more of the flag than the market), **blue to easier to fill**, pale grey is about the same. The "
+               "number is the group's own value, with the postings it rests on below it. **Blank cells marked "
+               f"\"too few\"** rest on fewer than {logic.GRID_MIN_BASE} postings and are not coloured. Read across "
+               "a row to see which causes a group shows; rows with the fewest applicants come first.")
     if groups.empty or (groups["group_type"] == "overall").sum() == 0:
         st.info("No summary rows this week. Rerun the weekly_metrics DAG to build metrics.group_signals.")
         return
@@ -183,8 +183,8 @@ def _summary_figure(rows, overall):
               for j, (title, _, _, _) in enumerate(logic.GRID_COLUMNS)] for i, lab in enumerate(shown["group_label"])]
 
     def cells(small: bool):
-        """Cell text (value, then the postings it rests on) for the coloured cells or for the grey ones."""
-        return [[f"{t}<br><span style='font-size:10px'>{b:,} postings</span>" if s == small else ""
+        """Cell text for the coloured cells (value, then the postings it rests on) or for the too-few ones."""
+        return [[f"{'<i>too few</i>' if small else t}<br><span style='font-size:10px'>{b:,} postings</span>" if s == small else ""
                  for t, b, s in zip(text_row, base_row, small_row)]
                 for text_row, base_row, small_row in zip(grid["text"], grid["bases"], grid["small"])]
 
@@ -195,15 +195,21 @@ def _summary_figure(rows, overall):
         colorscale=GRID_SCALE, zmin=-logic.GRID_CAP, zmax=logic.GRID_CAP,
         colorbar=dict(title=dict(text="vs all postings", side="right"), tickvals=list(GRID_TICKS),
                       ticktext=list(GRID_TICKS.values()), thickness=12, len=0.6), **common))
-    # cells on too few postings: a flat grey layer with muted text, outside the colour scale
+    # cells on too few postings: left blank (transparent) with muted "too few" text, so they can't be
+    # mistaken for the pale grey "about the same" of the colour scale
     fig.add_trace(go.Heatmap(
         z=[[1 if s else None for s in row] for row in grid["small"]], text=cells(True),
-        textfont=dict(size=12, color="#8a8984"), colorscale=[[0, GRID_TOO_FEW], [1, GRID_TOO_FEW]],
+        textfont=dict(size=12, color=GRID_TOO_FEW), colorscale=[[0, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,0)"]],
         showscale=False, **common))
+    # legend entry for the blank cells (the colour bar only covers the coloured ones)
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None], mode="markers", name=f"Fewer than {logic.GRID_MIN_BASE} postings: too few to read",
+        marker=dict(symbol="square-open", size=12, color=GRID_TOO_FEW), hoverinfo="skip"))
     fig.update_yaxes(autorange="reversed", automargin=True, ticksuffix="  ")   # first row (fewest applicants) on top
     fig.update_xaxes(side="top", automargin=True)
-    fig.update_layout(height=max(360, 40 * len(shown) + 120), margin=dict(t=70, b=20, l=10, r=10),
-                      plot_bgcolor="rgba(0,0,0,0)")
+    fig.update_layout(height=max(360, 40 * len(shown) + 150), margin=dict(t=70, b=50, l=10, r=10),
+                      plot_bgcolor="rgba(0,0,0,0)", showlegend=True,
+                      legend=dict(orientation="h", x=0, xanchor="left", y=0, yref="container", yanchor="bottom"))
     return fig
 
 
