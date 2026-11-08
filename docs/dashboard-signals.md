@@ -90,7 +90,7 @@ rendered with Streamlit AppTest).
 Two rules were tightened after a check of the week ending 3 Nov, and a summary grid was added (rebuild old weeks
 by clearing their weekly_metrics runs, or `python -m metrics.run --week-ending 2026-10-27 2026-11-03`):
 
-- **Shortage reads direct employers only.** Employment agencies (SSIC 78) posted 42% of open postings but 60% of
+- **Shortage reads direct employers only.** Employment agencies (SSIC 78) posted 43% of open postings but 60% of
   shortage postings; one agency alone made 738 of the 2,255. Shortage share 2.5% -> 1.8%, listed skills 74 -> 41.
   The construction skills stay (Tendering, Quantity Surveying, Cost Control, Technical Drawing); Revit, HVAC and
   B2B Sales were agency-driven and drop out.

@@ -131,7 +131,7 @@ this outside 10:00 to 11:00 SGT so the restart in step 4 does not interrupt the 
    Get-Content sql/init/05_metrics_signals.sql | docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
    ```
    Check: `docker compose exec warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\dt metrics.*"'`
-   lists `mcf_vs_mom_share` and the 8 signal tables.
+   lists `mcf_vs_mom_share` and the 9 tables of `05`: `run_log`, `posting_week` and the 7 signal tables.
 4. `docker compose up -d`. `docker-compose.yml` now mounts `./metrics` into the Airflow containers, and compose
    recreates the webserver and scheduler to pick it up. The warehouse and its data are untouched. Never
    `docker compose down -v`: `-v` deletes the warehouse volume with every snapshot in it.
