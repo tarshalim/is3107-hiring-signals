@@ -318,11 +318,18 @@ def skill_options(skills: pd.DataFrame) -> dict:
     return labels
 
 
+DEFAULT_LOOKUP_SKILL = "Quantity Surveying"   # the strongest finding: construction cost skills, 26 to 60 employers
+
+
 def default_skill(skills: pd.DataFrame, shown: int = 15) -> str | None:
-    """The lookup opens on the most common skill of the shortage list the Hiring signals tab shows, so a
-    first-time viewer sees a filled-in example; otherwise on the most common skill."""
+    """The lookup opens on DEFAULT_LOOKUP_SKILL when the week has it, so a first-time viewer sees the clearest
+    example; otherwise on the most common skill of the shortage list the Hiring signals tab shows, otherwise on
+    the most common skill."""
     if skills.empty:
         return None
+    named = skills[skills["skill_name"] == DEFAULT_LOOKUP_SKILL]
+    if not named.empty:
+        return named.sort_values("open_postings", ascending=False, na_position="last")["skill_ref"].iloc[0]
     top = shortage_skills(skills).head(shown)
     pool = top if not top.empty else skills
     return pool.sort_values("open_postings", ascending=False, na_position="last")["skill_ref"].iloc[0]
@@ -368,9 +375,10 @@ def shortage_verdict(row, t: dict) -> dict:
     caption = (f"as likely as the average direct employer's posting to be reposted {t['shortage_min_reposts']}+ "
                f"times with at most {t['shortage_max_applications']} applications "
                f"({int(row['shortage_postings']):,} postings, {int(row['shortage_companies']):,} employers).")
-    if lift < 1:
-        caption += " Below 1x: no shortage signal."
-    return {"value": times(lift), "delta": None, "flagged": lift >= 1,
+    # a shortage signal from shortage_min_lift (1.5x) only; weeks built before 8 Nov listed lower lifts too
+    if lift < t["shortage_min_lift"]:
+        caption += f" Below {t['shortage_min_lift']}x: no shortage signal."
+    return {"value": times(lift), "delta": None, "flagged": lift >= t["shortage_min_lift"],
             "caption": caption + _was(row.get("shortage_listed_prev_week"))}
 
 

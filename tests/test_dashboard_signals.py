@@ -166,11 +166,15 @@ def test_skill_options_rank_by_postings_and_tell_twin_names_apart():
     assert options["b"] == "Python"
 
 
-def test_lookup_opens_on_the_most_common_skill_of_the_shown_shortage_list():
-    assert logic.default_skill(_skills()) == "pm"                        # 4,653 postings, on the shortage list
-    assert logic.default_skill(_skills(), shown=2) == "qs"               # only Revit and QS shown
-    no_shortage = _skills().assign(shortage_listed=False)
-    assert logic.default_skill(no_shortage) == "pm"                      # falls back to the most common skill
+def test_lookup_opens_on_quantity_surveying_when_the_week_has_it():
+    """8 Nov check: it opened on Collaboration (1.4x), the commission-sales artefact."""
+    assert logic.DEFAULT_LOOKUP_SKILL == "Quantity Surveying"
+    assert logic.default_skill(_skills()) == "qs"
+    assert logic.default_skill(_skills().assign(shortage_listed=False)) == "qs"   # listed or not
+    without = _skills()[_skills()["skill_ref"] != "qs"]
+    assert logic.default_skill(without) == "pm"                          # most common skill on the shortage list
+    assert logic.default_skill(without, shown=1) == "rev"                # only Revit shown
+    assert logic.default_skill(without.assign(shortage_listed=False)) == "pm"   # the most common skill
     assert logic.default_skill(_skills().iloc[0:0]) is None
 
 
@@ -218,7 +222,12 @@ def test_shortage_verdict():
     assert v["value"] == "2.5x" and v["flagged"] and "86 postings, 51 employers" in v["caption"]
     assert "Flagged last week too" in v["caption"]
     low = logic.shortage_verdict(_row(shortage_lift=0.49), T)
-    assert not low["flagged"] and "Below 1x" in low["caption"]
+    assert not low["flagged"] and "Below 1.5x" in low["caption"]
+    # Collaboration on 3 Nov, listed before the 1.5x minimum: not called a shortage signal
+    collab = _row(skill_name="Collaboration", shortage_lift=1.432)
+    assert not logic.shortage_verdict(collab, T)["flagged"]
+    assert "no shortage or barrier signal" in logic.lookup_summary(collab, T)
+    assert logic.shortage_verdict(_row(shortage_lift=1.5), T)["flagged"]
     none = logic.shortage_verdict(_row(shortage_listed=False), T)
     assert none["value"] == "No" and "needs 1.5x" in none["caption"] and "25+ such postings" in none["caption"]
     first = logic.shortage_verdict(_row(shortage_listed_prev_week=None), T)
