@@ -19,6 +19,11 @@ from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from psycopg2.extras import execute_values
 
+try:  # Airflow 3
+    from airflow.sdk import get_current_context
+except ImportError:  # Airflow 2
+    from airflow.operators.python import get_current_context
+
 from common.alerts import TASK_ALERTS, on_dag_failure   # dags/common: failure and retry alerts
 from ingestion.mcf_client import read_snapshot, read_snapshot_batches, snapshot_to_file
 from quality.snapshot_checks import (DRIFT_SAMPLE, drift_tables_ready, field_stats, record_schema_drift,
@@ -50,6 +55,8 @@ def daily_mcf_ingest():
         max_pages = int(os.environ.get("MCF_MAX_PAGES", "0"))
         stats = snapshot_to_file(RAW_DIR / f"{snapshot_date}.jsonl.gz", max_pages=max_pages)
         stats["snapshot_date"] = snapshot_date
+        # which try of this task wrote the day (1 = no retry), for the Pipeline health tab's reliability numbers
+        stats["fetch_attempts"] = get_current_context()["ti"].try_number
         print(json.dumps(stats))
         return stats
 
@@ -86,14 +93,17 @@ def daily_mcf_ingest():
                     loaded += len(rows)
                 cur.execute(
                     """
-                    INSERT INTO raw.ingest_runs (snapshot_date, pages_fetched, jobs_fetched, api_total, seconds_taken)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO raw.ingest_runs (snapshot_date, pages_fetched, jobs_fetched, api_total, seconds_taken,
+                                                 fetch_attempts, retries_429)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (snapshot_date) DO UPDATE SET
                         pages_fetched = EXCLUDED.pages_fetched, jobs_fetched = EXCLUDED.jobs_fetched,
                         api_total = EXCLUDED.api_total, seconds_taken = EXCLUDED.seconds_taken,
+                        fetch_attempts = EXCLUDED.fetch_attempts, retries_429 = EXCLUDED.retries_429,
                         finished_at = now()
                     """,
-                    (ds, stats["pages_fetched"], stats["jobs_fetched"], stats["api_total"], stats["seconds_taken"]),
+                    (ds, stats["pages_fetched"], stats["jobs_fetched"], stats["api_total"], stats["seconds_taken"],
+                     stats.get("fetch_attempts"), stats.get("retries_429")),
                 )
         finally:
             conn.close()

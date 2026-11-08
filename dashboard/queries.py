@@ -406,8 +406,10 @@ def occupation_skill_profiles():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def ingest_runs(days: int = 30):
+    """One row per crawled day. fetch_attempts and retries_429 are NULL where not recorded (ops/ingest_retries.py)."""
     return run_query("""
-        SELECT snapshot_date, pages_fetched, jobs_fetched, api_total, seconds_taken, finished_at
+        SELECT snapshot_date, pages_fetched, jobs_fetched, api_total, seconds_taken, finished_at,
+               fetch_attempts, retries_429
         FROM raw.ingest_runs
         ORDER BY snapshot_date DESC
         LIMIT %(days)s
@@ -416,6 +418,8 @@ def ingest_runs(days: int = 30):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_steps(days: int = 14):
+    """Seconds per transform step of each day's latest run. The 'dag_run' row (the whole run) is left out: it
+    overlaps the steps and includes the sensor's wait for the day's crawl (up to 262,000 s on 25 to 27 Oct)."""
     return run_query("""
         WITH last_run AS (
             SELECT DISTINCT ON (snapshot_date) snapshot_date, run_id
@@ -426,6 +430,7 @@ def load_steps(days: int = 14):
         FROM clean.load_log l
         JOIN last_run r ON r.snapshot_date = l.snapshot_date AND r.run_id = l.run_id
         WHERE l.snapshot_date > (SELECT max(snapshot_date) FROM clean.load_log) - %(days)s
+          AND l.step <> 'dag_run'
         ORDER BY l.snapshot_date, l.started_at
     """, {"days": days})
 
