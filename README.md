@@ -133,7 +133,6 @@ category, skill type and emerging skills:
 - **Salary estimator**: estimates the monthly salary midpoint for an occupation, position level, category,
   experience and skill set, with a likely range, what drives the estimate and the model's held-out error
   against the proposal's 15% target.
-- **Hiring difficulty**: applications per posting, repost rate and days open, combined into a relative index.
 - **Career moves**: occupations with similar skill demand, the skill gap between two occupations, and the
   occupations your own skills cover best.
 - **Pipeline health**: daily-run reliability against the 95% target, ingestion coverage, transform timings,

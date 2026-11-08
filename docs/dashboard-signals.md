@@ -108,8 +108,9 @@ To apply on the collector laptop: `05_metrics_signals.sql` (adds `posting_week.p
 - Your style is kept: one module per tab, SQL in a cached queries module, Plotly, `st.info` for empty states.
   The new SQL sits in `signal_queries.py` instead of `queries.py` only so the branches merge cleanly.
 - Colours reuse the two blues of your salary band chart: dark = flagged last week too, light = new this week.
-- Hiring difficulty (daily marts, a relative index) and Competition (weekly, applications per posting per 24
-  hours) are different measures. The report and video quote the weekly numbers.
+- The daily Hiring difficulty tab (a relative index on the daily marts) was removed on 8 Nov: it ranked
+  occupations differently from the weekly signals. Competition (weekly, applications per posting per 24 hours) is
+  the measure the report and video quote.
 - To change a view's columns, `DROP VIEW metrics.skill_signals, metrics.signal_weeks` first: `CREATE OR REPLACE
   VIEW` can only add columns at the end.
 - Two weeks exist so far, so "flagged last week too" is a two-point comparison, and skill demand has one fully

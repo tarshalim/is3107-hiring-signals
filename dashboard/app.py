@@ -14,7 +14,7 @@ from dashboard.filters import (  # noqa: E402
 )
 from dashboard.signals import week_label  # noqa: E402
 from dashboard.tabs import (  # noqa: E402
-    difficulty, estimator, industries, market, pipeline, salary, signals, skill_lookup, transitions, trending,
+    estimator, industries, market, pipeline, salary, signals, skill_lookup, transitions, trending,
 )
 
 st.set_page_config(page_title="SG hiring signals", page_icon=":bar_chart:", layout="wide")
@@ -100,8 +100,9 @@ def main():
             st.info(f"Only {int(cov['days'])} days of history: week-over-week changes need 14 days and "
                     "are hidden until then.")
 
+    # no daily "Hiring difficulty" tab (removed 8 Nov): its index ranked jobs differently from the weekly signals
     tabs = st.tabs([*WEEKLY_TABS, "Trending skills", "Salary", "Industries & employers", "Salary estimator",
-                    "Hiring difficulty", "Career moves", "Pipeline health"])
+                    "Career moves", "Pipeline health"])
     # the weekly tabs read only `metrics`, so they work even before the daily marts are built
     for tab, view in zip(tabs, (signals.render, skill_lookup.render, market.render)):
         with tab:
@@ -113,9 +114,9 @@ def main():
             except Exception as exc:  # keep the other tabs usable if one weekly view fails
                 st.error("This view failed to load.")
                 st.exception(exc)
-    tab_trend, tab_salary, tab_ind, tab_est, tab_diff, tab_move, tab_pipe = tabs[len(WEEKLY_TABS):]
+    tab_trend, tab_salary, tab_ind, tab_est, tab_move, tab_pipe = tabs[len(WEEKLY_TABS):]
     if not marts_ready:
-        for tab in (tab_trend, tab_salary, tab_ind, tab_est, tab_diff, tab_move):
+        for tab in (tab_trend, tab_salary, tab_ind, tab_est, tab_move):
             with tab:
                 no_marts(marts_error)
         with tab_pipe:
@@ -132,8 +133,6 @@ def main():
         industries.render(f, int(cov["days"]))
     with tab_est:
         estimator.render()
-    with tab_diff:
-        difficulty.render(f)
     with tab_move:
         transitions.render()
     with tab_pipe:

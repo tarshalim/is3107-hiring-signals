@@ -70,7 +70,9 @@ SELECT f.snapshot_date,
        COALESCE(f.reposted_since_prev, FALSE)            AS reposted_since_prev,
        f.days_since_original_posting,
        COALESCE(j.vacancies, 1)                          AS vacancies,
-       COALESCE(NULLIF(j.company_ssic_desc, ''), 'Unknown industry') AS industry,
+       -- MCF fills a missing SSIC with the code '00000' as its description too: that is no industry either
+       CASE WHEN COALESCE(j.company_ssic_desc, '') ~ '^[0-9 ]*$' THEN 'Unknown industry'
+            ELSE j.company_ssic_desc END                 AS industry,
        -- an agency posting for a client counts for the client, which is who is actually hiring
        COALESCE(NULLIF(COALESCE(NULLIF(j.hiring_company_name, ''), j.company_name), ''), 'Unknown employer') AS employer,
        COALESCE(j.position_level, 'Unknown')             AS position_level,
