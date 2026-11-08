@@ -34,13 +34,14 @@ which the occupation already gives).
 | Management | ambiguous | Does not say management of what: people, projects, stock or a business |
 | Mechanical | fragment | Part of a longer skill: mechanical trade work or mechanical engineering (Mechanical Engineering is its own tag) |
 | Structural | fragment | Part of a longer skill: structural engineering, steelwork or structural design |
+| Foot | fragment | Part of a longer skill: foot reflexology, foot massage or foot care (topped the 27 Oct shortage list at 6.9x; added 8 Nov) |
 | Construction | sector | An industry, not a skill: it marks the sector the posting is in, which the occupation already does |
 | Manufacturing | sector | An industry, not a skill: it marks the sector the posting is in, which the occupation already does |
 | Healthcare | sector | An industry, not a skill: it marks the sector the posting is in, which the occupation already does |
 | Hospitality | sector | An industry, not a skill: it marks the sector the posting is in, which the occupation already does |
 | Finance | sector | A field, not a skill: accounting, financial analysis and reporting have their own tags |
 
-All 15 are single MCF tags, and none is mapped to a SkillsFuture skill, so matching on the tag name is exact.
+All 16 are single MCF tags, and none is mapped to a SkillsFuture skill, so matching on the tag name is exact.
 None of them appears in `data/reference/skill_aliases.csv`.
 
 ## Open postings per tag (week ending 3 Nov)

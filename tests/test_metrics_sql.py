@@ -153,6 +153,7 @@ def test_generic_tags_are_left_out_of_every_skill_level_table():
     assert {r["kind"] for r in rows} <= {"ambiguous", "fragment", "sector"}
     tags = THRESHOLDS["generic_skill_tags"]
     assert "cuts" in tags and tags == sorted(set(tags)) and all(t == t.lower() for t in tags)
+    assert "foot" in tags                     # 8 Nov check: a fragment that topped the 27 Oct shortage list
     # every skill-level table reads skills through one of these three filtered joins
     assert "lower(s.mcf_skill_name) <> ALL(%(generic_skill_tags)s::text[])" in build_week._POOL_SKILL
     for name in ("barrier_skill", "shortage_skill", "competitiveness", "skill_salary"):
