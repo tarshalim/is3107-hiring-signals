@@ -307,6 +307,7 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
     assert _one(conn, """SELECT top_company_share, lift FROM metrics.barrier_skill
                          WHERE week_end_date = %s AND skill_name = 'Pack goods'""", D3) == (Decimal("1.0000"), Decimal("5.000"))
     assert _all(conn, "SELECT skill_name FROM metrics.shortage_skill WHERE week_end_date = %s", D3) == []
+    assert _all(conn, "SELECT skill_name FROM metrics.skill_salary WHERE week_end_date = %s", D3) == []   # pay too
     assert _one(conn, "SELECT thresholds->>'max_top_company_share' FROM metrics.run_log WHERE week_end_date = %s",
                 D3) == ("0.5",)
 

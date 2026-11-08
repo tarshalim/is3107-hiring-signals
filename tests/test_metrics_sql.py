@@ -223,6 +223,18 @@ def test_a_shortage_skill_needs_the_same_minimum_lift_as_a_barrier_skill():
                              ">= %(shortage_min_lift)s")
 
 
+def test_one_bulk_employer_cannot_make_a_skills_pay():
+    """8 Nov check: Project Resources topped the skill salary list at $14,000 from 54 of 109 postings by one
+    recruiter. Same cap as shortage and barrier, over the skill's postings with a usable salary."""
+    salary = " ".join(build_week.SKILL_SALARY_SQL.split())
+    assert "SELECT job_uuid, company_name, vacancies" in salary
+    assert "JOIN paid p ON p.job_uuid = ps.job_uuid GROUP BY ps.skill_ref, p.company_name" in salary
+    assert salary.endswith("WHERE t.top_n::numeric / p.postings <= %(max_top_company_share)s")
+    assert "mid_vs_overall, top_company_share)" in salary
+    assert "top_company_share" in _table_blocks(SCHEMA)["skill_salary"]
+    assert "ALTER TABLE metrics.skill_salary ADD COLUMN IF NOT EXISTS top_company_share" in SCHEMA
+
+
 def test_shortage_reads_direct_employers_only():
     """Employment agencies (SSIC 78) posted 42% of open postings but 60% of the shortage postings on 3 Nov: their
     evergreen ads are reposted with few applicants whatever the market does. They stay in posting_week, flagged."""

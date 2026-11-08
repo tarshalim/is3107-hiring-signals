@@ -260,7 +260,8 @@ def test_demand_and_pay_verdicts():
     assert logic.demand_verdict(_row(demand_week=None))["value"] == "n/a"
     p = logic.pay_verdict(_row(), T)
     assert p["value"] == "$4,500" and "$3,900 to $5,750" in p["caption"] and "1.1x" in p["caption"]
-    assert logic.pay_verdict(_row(salary_mid_median=None), T)["value"] == "n/a"
+    none = logic.pay_verdict(_row(salary_mid_median=None), T)
+    assert none["value"] == "n/a" and "more than 50% of them" in none["caption"]
 
 
 def test_lookup_summary_names_the_causes():

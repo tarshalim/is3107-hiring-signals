@@ -77,7 +77,8 @@ THRESHOLDS = {
                                      # on 3 Nov, with 5, Metal Fabrication's 57 shortage postings came from 5 firms)
     "max_top_company_share": 0.5,    # a barrier or shortage skill is not flagged when its single biggest employer
                                      # posts more than half of its flagged postings (10 employers can still be
-                                     # one bulk poster plus nine with a posting each)
+                                     # one bulk poster plus nine with a posting each). skill_salary leaves a skill
+                                     # out when one employer posts more than half of its salaried postings
     # employment agencies: the poster's SSIC 2020 code starts with 78 (employment activities). On 3 Nov they posted
     # 42% of open postings but 60% of the shortage postings (3.6% of theirs against 1.8% for direct employers):
     # agencies keep evergreen ads up and repost them, which looks like a shortage but is not one. The shortage
@@ -628,12 +629,22 @@ WHERE p.skill_total >= %(demand_min_postings)s
 SKILL_SALARY_SQL = f"""
 INSERT INTO metrics.skill_salary (week_end_date, snapshot_date, skill_ref, skill_name, is_mapped, postings,
     vacancies, salary_min_median, salary_max_median, salary_mid_p25, salary_mid_median, salary_mid_p75,
-    mid_vs_overall)
+    mid_vs_overall, top_company_share)
 WITH {_POOL_SKILL}, {_SKILL_NAMES},
 paid AS (
-    SELECT job_uuid, vacancies, salary_min, salary_max, salary_mid
+    SELECT job_uuid, company_name, vacancies, salary_min, salary_max, salary_mid
     FROM metrics.posting_week
     WHERE week_end_date = %(e)s AND salary_usable
+),
+top_company AS (
+    -- per skill, the salaried postings of its single biggest employer (8 Nov check: 54 of Project Resources'
+    -- 109 postings were one recruiter's $10-18k site manager ads, which made it the top-paid skill)
+    SELECT skill_ref, max(n) AS top_n
+    FROM (SELECT ps.skill_ref, p.company_name, count(*) AS n
+          FROM pool_skill ps
+          JOIN paid p ON p.job_uuid = ps.job_uuid
+          GROUP BY ps.skill_ref, p.company_name) per_company
+    GROUP BY skill_ref
 ),
 overall AS (
     SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY salary_mid) AS mid FROM paid
@@ -651,10 +662,14 @@ per_skill AS (
 SELECT %(e)s, %(s)s, p.skill_ref, n.skill_name, n.is_mapped, p.postings, p.vacancies,
        round(p.min_med::numeric, 2), round(p.max_med::numeric, 2),
        round(p.mid_q[1]::numeric, 2), round(p.mid_q[2]::numeric, 2), round(p.mid_q[3]::numeric, 2),
-       round(p.mid_q[2]::numeric / NULLIF(o.mid::numeric, 0), 3)
+       round(p.mid_q[2]::numeric / NULLIF(o.mid::numeric, 0), 3),
+       round(t.top_n::numeric / p.postings, 4)
 FROM per_skill p
+JOIN top_company t ON t.skill_ref = p.skill_ref
 CROSS JOIN overall o
 JOIN skill_names n ON n.skill_ref = p.skill_ref
+-- as for shortage: a skill's pay is left out when one employer posts more than max_top_company_share of it
+WHERE t.top_n::numeric / p.postings <= %(max_top_company_share)s
 """
 
 # ---------------------------------------------------------------------------------------------
@@ -748,6 +763,8 @@ METRIC_CHECKS = [
                        AND (flagged_share NOT BETWEEN 0 AND 1 OR flagged_postings > base_postings))
                   + (SELECT count(*) FROM metrics.skill_demand WHERE week_end_date = %(e)s
                        AND share_of_week NOT BETWEEN 0 AND 1)
+                  + (SELECT count(*) FROM metrics.skill_salary WHERE week_end_date = %(e)s
+                       AND top_company_share NOT BETWEEN 0 AND 1)
                   + (SELECT count(*) FROM metrics.barrier_skill WHERE week_end_date = %(e)s
                        AND (barrier_share NOT BETWEEN 0 AND 1 OR lift < 0 OR barrier_postings > postings
                             OR top_company_share NOT BETWEEN 0 AND 1))

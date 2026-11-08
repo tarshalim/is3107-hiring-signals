@@ -253,6 +253,8 @@ CREATE TABLE IF NOT EXISTS metrics.skill_salary (
     salary_mid_median  NUMERIC(12,2),
     salary_mid_p75     NUMERIC(12,2),
     mid_vs_overall     NUMERIC(8,3),                -- salary_mid_median / median over all open postings
+    top_company_share  NUMERIC(6,4),                -- share of the postings from the single biggest employer
+                                                    -- (a skill above thresholds.max_top_company_share is left out)
     PRIMARY KEY (week_end_date, skill_ref)
 );
 
@@ -326,3 +328,5 @@ ALTER TABLE metrics.barrier_skill  ADD COLUMN IF NOT EXISTS is_technical BOOLEAN
 ALTER TABLE metrics.shortage_skill ADD COLUMN IF NOT EXISTS is_technical BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE metrics.barrier_skill  ALTER COLUMN is_technical DROP DEFAULT;
 ALTER TABLE metrics.shortage_skill ALTER COLUMN is_technical DROP DEFAULT;
+-- skill salary: one bulk employer cannot make a skill's pay either (thresholds.max_top_company_share, 8 Nov)
+ALTER TABLE metrics.skill_salary ADD COLUMN IF NOT EXISTS top_company_share NUMERIC(6,4);

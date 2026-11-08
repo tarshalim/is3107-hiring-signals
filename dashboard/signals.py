@@ -315,7 +315,8 @@ def demand_verdict(row) -> dict:
 def pay_verdict(row, t: dict) -> dict:
     if missing(row.get("salary_mid_median")):
         return {"value": "n/a", "delta": None,
-                "caption": f"Fewer than {t['salary_min_postings']} open postings with a usable salary."}
+                "caption": f"Fewer than {t['salary_min_postings']} open postings with a usable salary, or one "
+                           f"employer posts more than {t['max_top_company_share']:.0%} of them."}
     return {"value": money(row["salary_mid_median"]), "delta": None,
             "caption": f"median a month, {times(row['salary_vs_overall'])} the median posting. The middle half pay "
                        f"{money(row['salary_mid_p25'])} to {money(row['salary_mid_p75'])}."}
