@@ -164,6 +164,30 @@ def test_generic_tags_are_left_out_of_every_skill_level_table():
         " ".join(build_week.SKILL_DEMAND_SQL.split())
 
 
+def test_shortage_and_barrier_rows_say_whether_the_skill_is_technical():
+    """8 Nov check: commission-sales firms push soft skills up both lists. is_technical = SkillsFuture 'tsc', or an
+    unmapped tag not on data/reference/soft_skill_tags.csv; critical core skills ('ccs') never are."""
+    import csv
+    with open(build_week.SOFT_SKILL_TAGS_CSV, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows and all(r["mcf_skill_name"].strip() and r["reason"].strip() for r in rows)
+    soft = THRESHOLDS["soft_skill_tags"]
+    assert {"positive attitude", "self motivation", "enjoy working with people"} <= set(soft)
+    assert soft == sorted(set(soft)) and all(t == t.lower() for t in soft)
+    # the construction cluster is unmapped and must stay technical
+    assert not {"tendering", "quantity surveying", "cost control"} & set(soft)
+    assert not set(soft) & set(THRESHOLDS["generic_skill_tags"])     # generic tags are dropped, not hidden
+    names = " ".join(build_week._SKILL_NAMES.split())
+    assert ("(ssg_skill_type = 'tsc' OR (ssg_skill_id IS NULL AND lower(mcf_skill_name) <> "
+            "ALL(%(soft_skill_tags)s::text[]))) IS TRUE AS is_technical") in names
+    blocks = _table_blocks(SCHEMA)
+    for name in ("barrier_skill", "shortage_skill"):
+        sql = " ".join(INSERT_SQL[name].split())
+        assert "skill_type, is_technical)" in sql and "n.skill_type, n.is_technical FROM" in sql, name
+        assert "is_technical" in blocks[name] and "skill_type" in blocks[name]
+        assert f"ALTER TABLE metrics.{name:<14} ADD COLUMN IF NOT EXISTS is_technical" in SCHEMA
+
+
 def test_reposted_many_apps_counts_direct_employers_only():
     """As shortage: agencies keep evergreen ads up and repost them. The experience flags keep every poster."""
     sql = " ".join(build_week.UNREALISTIC_SQL.split())

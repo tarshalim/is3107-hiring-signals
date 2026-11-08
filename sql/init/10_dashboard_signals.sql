@@ -63,7 +63,7 @@ SELECT s.week_end_date,
        s.skill_ref,
        COALESCE(b.skill_name, sh.skill_name, sa.skill_name, c.group_label, i.skill_name) AS skill_name,
        COALESCE(b.is_mapped, sh.is_mapped, sa.is_mapped, i.is_mapped)                   AS is_mapped,
-       i.skill_type,
+       COALESCE(b.skill_type, sh.skill_type, i.skill_type)                              AS skill_type,
        COALESCE(b.is_casl, sh.is_casl)                                                  AS is_casl,
        COALESCE(c.postings, b.postings)                                                 AS open_postings,
        -- demand: share of the postings first posted in that week that ask for the skill (0 if none did)
@@ -105,7 +105,10 @@ SELECT s.week_end_date,
        pc.apps_per_posting_day_24h AS apps_per_posting_day_24h_prev_week,
        -- added last (a replaced view can only gain columns at the end): applications per view against all
        -- postings, which a barrier skill must keep below thresholds.barrier_max_rate_vs_overall
-       b.rate_vs_overall    AS barrier_rate_vs_overall
+       b.rate_vs_overall    AS barrier_rate_vs_overall,
+       -- a technical skill (SkillsFuture 'tsc', or an unmapped tag that is not a trait or attitude): the default
+       -- view of the shortage and barrier lists. NULL when the skill has neither row
+       COALESCE(b.is_technical, sh.is_technical) AS is_technical
 FROM skills s
 JOIN metrics.signal_weeks w ON w.week_end_date = s.week_end_date
 LEFT JOIN metrics.barrier_skill b   ON b.week_end_date = s.week_end_date AND b.skill_ref = s.skill_ref

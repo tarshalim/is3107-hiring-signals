@@ -163,6 +163,15 @@ def barrier_skills(skills: pd.DataFrame) -> pd.DataFrame:
     return rows.assign(stability=rows["is_barrier_prev_week"].map(stability))
 
 
+def technical_only(rows: pd.DataFrame, on: bool = True) -> pd.DataFrame:
+    """The technical skills of a shortage or barrier list (is_technical: SkillsFuture 'tsc', or an unmapped tag
+    that is not a trait or attitude); every row when on is False. A week built before 8 Nov has no is_technical
+    and is returned whole."""
+    if not on or "is_technical" not in rows or rows["is_technical"].isna().all():
+        return rows
+    return rows[rows["is_technical"].fillna(False).astype(bool)]
+
+
 def carried_over(rows: pd.DataFrame) -> tuple[int, int] | None:
     """(flagged last week too, flagged this week) for a list from shortage_skills / barrier_skills; None if
     there is no earlier week."""

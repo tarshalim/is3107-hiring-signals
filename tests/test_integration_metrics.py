@@ -349,6 +349,18 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
     assert _one(conn, "SELECT count(*) FILTER (WHERE is_shortage) FROM metrics.posting_week WHERE week_end_date = %s",
                 D3) == (1,)
 
+    # ---- technical skills: Forklift Operation is an unmapped tag, so technical until it is on the soft-tag list.
+    # It stays in the table either way: only the dashboard's default view hides it ------------------------------
+    run_week(conn, D3 - timedelta(days=7), D3, run_id="test-w3-technical", thresholds=SMALL)
+    assert _one(conn, """SELECT skill_type, is_technical FROM metrics.shortage_skill
+                         WHERE week_end_date = %s AND skill_name = 'Forklift Operation'""", D3) == (None, True)
+    run_week(conn, D3 - timedelta(days=7), D3, run_id="test-w3-soft",
+             thresholds={**SMALL, "soft_skill_tags": ["forklift operation"]})
+    assert _one(conn, """SELECT is_technical FROM metrics.shortage_skill
+                         WHERE week_end_date = %s AND skill_name = 'Forklift Operation'""", D3) == (False,)
+    assert _one(conn, """SELECT is_technical FROM metrics.barrier_skill
+                         WHERE week_end_date = %s AND skill_name = 'Forklift Operation'""", D3) == (False,)
+
     # ---- a barrier skill must also get fewer applications per view than the whole market: Pack goods (g, 7 / 120 =
     # 0.0583) against 340 / 2,080 = 0.1635 overall is 0.357 of it; a cap of 0.3 drops it ----------------------
     run_week(conn, D3 - timedelta(days=7), D3, run_id="test-w3-market-rate",

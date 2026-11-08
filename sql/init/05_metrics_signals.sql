@@ -139,6 +139,9 @@ CREATE TABLE IF NOT EXISTS metrics.barrier_skill (
                                                     -- max_top_company_share of them, and rate_vs_overall below
                                                     -- barrier_max_rate_vs_overall (fewer applications per view than
                                                     -- the whole market, not only than similar jobs)
+    skill_type          TEXT,                       -- SkillsFuture type 'tsc' / 'ccs'; NULL when not mapped
+    is_technical        BOOLEAN NOT NULL,           -- 'tsc', or not mapped and not in thresholds.soft_skill_tags
+                                                    -- (the dashboard's default "technical skills only" view)
     PRIMARY KEY (week_end_date, skill_ref)
 );
 
@@ -162,6 +165,8 @@ CREATE TABLE IF NOT EXISTS metrics.shortage_skill (
     lift                   NUMERIC(10,3),           -- shortage_share / overall_shortage_share. 2 = twice as common as usual
     median_repost_count    NUMERIC(8,1),            -- over the skill's shortage postings only
     median_applications    NUMERIC(10,1),           -- over the skill's shortage postings only
+    skill_type             TEXT,                    -- SkillsFuture type 'tsc' / 'ccs'; NULL when not mapped
+    is_technical           BOOLEAN NOT NULL,        -- as barrier_skill.is_technical
     PRIMARY KEY (week_end_date, skill_ref)
 );
 
@@ -313,3 +318,11 @@ ALTER TABLE metrics.skill_demand ADD COLUMN IF NOT EXISTS skill_type TEXT;
 -- shortage on direct employers only (thresholds.agency_ssic_prefix); metrics.group_signals is created above
 ALTER TABLE metrics.posting_week ADD COLUMN IF NOT EXISTS posted_by_agency BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE metrics.posting_week ALTER COLUMN posted_by_agency DROP DEFAULT;
+-- technical skills only by default on the dashboard (thresholds.soft_skill_tags, 8 Nov). Old weeks read FALSE
+-- (shown only under "all skills") until they are rerun
+ALTER TABLE metrics.barrier_skill  ADD COLUMN IF NOT EXISTS skill_type TEXT;
+ALTER TABLE metrics.shortage_skill ADD COLUMN IF NOT EXISTS skill_type TEXT;
+ALTER TABLE metrics.barrier_skill  ADD COLUMN IF NOT EXISTS is_technical BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE metrics.shortage_skill ADD COLUMN IF NOT EXISTS is_technical BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE metrics.barrier_skill  ALTER COLUMN is_technical DROP DEFAULT;
+ALTER TABLE metrics.shortage_skill ALTER COLUMN is_technical DROP DEFAULT;

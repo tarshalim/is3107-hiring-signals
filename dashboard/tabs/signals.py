@@ -9,6 +9,10 @@ from dashboard import signal_queries as sq, signals as logic
 SHOWN = 15                      # skills or occupations per chart
 LAST_WEEK = dict(symbol="line-ns-open", size=16, color="#333333", line=dict(width=2))
 FLAG_COLORS = ("#08519c", "#9ecae1")
+TECHNICAL_NOTE = ("Soft-skill results (Adaptability, Customer Orientation, Enjoy Working with People, Self Motivation) "
+                  "are inflated by commission-sales firms: direct-selling \"marketing\" companies that keep reposting "
+                  "ads few people apply to. They are not employment agencies, so the agency filter does not catch "
+                  "them, which is why the shortage and barrier lists show technical skills by default.")
 FLAG_NAMES = {
     "entry_level_2plus_years": ("Asking 2+ years", "Other entry-level postings"),
     "junior_2plus_years": ("Asking 2+ years", "Other Junior Executive postings"),
@@ -31,11 +35,16 @@ def render(week):
     if skills.empty and unreal.empty and comp.empty:
         st.info("This week has no signal rows. Check the weekly_metrics run on the Pipeline health tab.")
         return
-    shortage = logic.shortage_skills(skills) if not skills.empty else skills
-    barrier = logic.barrier_skills(skills) if not skills.empty else skills
+    technical = st.toggle("Technical skills only", value=True, key="signals_technical",
+                          help="Hides SkillsFuture critical core skills (e.g. Adaptability, Collaboration) and MCF "
+                               "tags that are traits or attitudes (e.g. Positive Attitude, Self Motivation; list in "
+                               "data/reference/soft_skill_tags.csv) from the shortage and barrier lists.")
+    st.caption(TECHNICAL_NOTE if technical else "Showing all skills. " + TECHNICAL_NOTE)
+    shortage = logic.technical_only(logic.shortage_skills(skills), technical) if not skills.empty else skills
+    barrier = logic.technical_only(logic.barrier_skills(skills), technical) if not skills.empty else skills
     labels = logic.skill_options(skills) if not skills.empty else {}
 
-    _headline(shortage, barrier, unreal, comp, market, t)
+    _headline(shortage, barrier, unreal, comp, market, t, skills)
     st.divider()
     _summary(groups, t)
     _shortage(shortage, labels, t)
@@ -55,10 +64,12 @@ def _overall(unreal, flag: str):
     return None if rows.empty else rows.iloc[0]
 
 
-def _headline(shortage, barrier, unreal, comp, market, t):
+def _headline(shortage, barrier, unreal, comp, market, t, skills):
     a, b, c, d = st.columns(4)
     with a.container(border=True):
-        share = shortage["overall_shortage_share"].iloc[0] if not shortage.empty else None
+        # the market's share is on every listed row; read it before the technical filter, which may leave none
+        shares = skills["overall_shortage_share"].dropna() if not skills.empty else skills
+        share = shares.iloc[0] if len(shares) else None
         st.metric("Shortage", logic.pct(share),
                   help=f"Open postings reposted {t['shortage_min_reposts']}+ times that still have at most "
                        f"{t['shortage_max_applications']} applications, as a share of open postings by direct "

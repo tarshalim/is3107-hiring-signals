@@ -49,8 +49,8 @@ def _seed(cur):
         cur.execute("""
             INSERT INTO metrics.shortage_skill (week_end_date, snapshot_date, skill_ref, skill_name, is_mapped, is_casl,
                 postings, shortage_postings, shortage_companies, top_company_share, shortage_share,
-                overall_shortage_share, lift)
-            VALUES (%s, %s, %s, %s, FALSE, FALSE, 1333, 86, 51, 0.13, 0.0645, 0.0254, %s)
+                overall_shortage_share, lift, is_technical)
+            VALUES (%s, %s, %s, %s, FALSE, FALSE, 1333, 86, 51, 0.13, 0.0645, 0.0254, %s, TRUE)
         """, (week, week, ref, name, lift))
 
     # barrier: GL flagged in W3, present but not flagged in W1; QS present, not flagged in W3
@@ -60,8 +60,8 @@ def _seed(cur):
         cur.execute("""
             INSERT INTO metrics.barrier_skill (week_end_date, snapshot_date, skill_ref, skill_name, is_mapped, is_casl,
                 postings, companies, barrier_postings, barrier_companies, top_company_share, barrier_share,
-                expected_share, lift, views, applications, is_barrier)
-            VALUES (%s, %s, %s, %s, FALSE, FALSE, 115, 40, 31, 25, 0.13, 0.27, 0.075, %s, 1000, 50, %s)
+                expected_share, lift, views, applications, is_barrier, skill_type, is_technical)
+            VALUES (%s, %s, %s, %s, FALSE, FALSE, 115, 40, 31, 25, 0.13, 0.27, 0.075, %s, 1000, 50, %s, NULL, TRUE)
         """, (week, week, ref, name, lift, flagged))
 
     cur.execute("""
@@ -170,6 +170,7 @@ def test_skill_signals_line_up_every_signal(conn):
     assert float(qs["apps_per_posting_day_24h"]) == pytest.approx(0.11)
     assert float(qs["overall_apps_per_posting_day_24h"]) == pytest.approx(0.35)
     assert float(qs["apps_per_posting_day_24h_prev_week"]) == pytest.approx(0.06)
+    assert qs["is_technical"] is True and rows["sm"]["is_technical"] is None      # sm: no shortage or barrier row
 
 
 def test_last_week_means_the_last_finished_week(conn):

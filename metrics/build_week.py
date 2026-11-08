@@ -40,13 +40,26 @@ from transform.parse import EXP_MAX
 from transform.snapshot_week import latest_snapshot_in_week
 
 GENERIC_SKILL_TAGS_CSV = Path(__file__).resolve().parent.parent / "data" / "reference" / "generic_skill_tags.csv"
+SOFT_SKILL_TAGS_CSV = Path(__file__).resolve().parent.parent / "data" / "reference" / "soft_skill_tags.csv"
+
+
+def _tag_names(path: Path) -> list[str]:
+    """The lower-cased mcf_skill_name column of a reference CSV."""
+    with open(path, newline="", encoding="utf-8") as f:
+        return sorted({row["mcf_skill_name"].strip().lower() for row in csv.DictReader(f)})
 
 
 def load_generic_skill_tags(path: Path = GENERIC_SKILL_TAGS_CSV) -> list[str]:
     """Lower-cased MCF tag names left out of every skill-level table: ambiguous tags like "Cuts" (hair, meat or
     cost cuts), fragments and sector names. The list and a reason for each are in the CSV."""
-    with open(path, newline="", encoding="utf-8") as f:
-        return sorted({row["mcf_skill_name"].strip().lower() for row in csv.DictReader(f)})
+    return _tag_names(path)
+
+
+def load_soft_skill_tags(path: Path = SOFT_SKILL_TAGS_CSV) -> list[str]:
+    """Lower-cased MCF tag names that are personal traits or attitudes ("Positive Attitude", "Self Motivation"),
+    not mapped to SkillsFuture. They stay in every table but are not is_technical, so the dashboard's default
+    "technical skills only" view hides them. The list and a reason for each are in the CSV."""
+    return _tag_names(path)
 
 
 THRESHOLDS = {
@@ -73,6 +86,12 @@ THRESHOLDS = {
     # MCF tags too ambiguous to read as a skill, left out of every skill-level table (barrier, shortage, demand,
     # salary, competitiveness by skill). Stored with the run like every other threshold
     "generic_skill_tags": load_generic_skill_tags(),
+    # technical skills (barrier_skill.is_technical, shortage_skill.is_technical): a SkillsFuture technical skill
+    # ('tsc'), or an MCF tag not mapped to SkillsFuture unless it is on this list of traits and attitudes. Critical
+    # core skills ('ccs', e.g. Adaptability) are not technical. On 3 Nov commission-sales firms (direct selling,
+    # SSIC 70205 or 47xxx, so not caught as agencies) made 28% of the direct-employer shortage postings and drove
+    # the soft skills to the top of both lists; the dashboard shows technical skills by default
+    "soft_skill_tags": load_soft_skill_tags(),
     # usable monthly salary: below 300 are hourly or daily rates typed into the monthly field (for example $12 to
     # $24 "per month" for a packing job, 1,395 postings below 300 on 25 Oct) and placeholders like $1, above
     # 100,000 are annual figures
@@ -141,7 +160,10 @@ _SKILL_NAMES = """
                COALESCE(ssg_skill_title, mcf_skill_name) AS skill_name,
                ssg_skill_id IS NOT NULL                  AS is_mapped,
                ssg_skill_type                            AS skill_type,   -- 'tsc' / 'ccs', NULL when not mapped
-               COALESCE(is_casl, FALSE)                  AS is_casl
+               COALESCE(is_casl, FALSE)                  AS is_casl,
+               -- technical: a SkillsFuture technical skill, or an unmapped tag that is not a trait or attitude
+               (ssg_skill_type = 'tsc' OR (ssg_skill_id IS NULL
+                AND lower(mcf_skill_name) <> ALL(%(soft_skill_tags)s::text[]))) IS TRUE AS is_technical
         FROM clean.dim_skill
         ORDER BY COALESCE(ssg_skill_id, mcf_skill_uuid), skill_key
     )"""
@@ -294,7 +316,7 @@ def _top_company(flag: str, direct_only: bool = False) -> str:
 BARRIER_SQL = f"""
 INSERT INTO metrics.barrier_skill (week_end_date, snapshot_date, skill_ref, skill_name, is_mapped, is_casl,
     postings, companies, barrier_postings, barrier_companies, top_company_share, barrier_share, expected_share, lift,
-    views, applications, apply_rate, overall_apply_rate, rate_vs_overall, is_barrier)
+    views, applications, apply_rate, overall_apply_rate, rate_vs_overall, is_barrier, skill_type, is_technical)
 WITH {_POOL_SKILL}, {_SKILL_NAMES}, {_top_company("is_barrier_posting")},
 group_share AS (
     -- share of barrier postings in each comparison group: what a posting of that group shows on average
@@ -336,7 +358,8 @@ SELECT %(e)s, %(s)s, r.skill_ref, n.skill_name, n.is_mapped, n.is_casl,
                 AND r.barrier_companies >= %(min_companies)s
                 AND r.top_share <= %(max_top_company_share)s
                 -- and fewer applications per view than the whole market, not only than similar jobs
-                AND r.rate / NULLIF(o.apply_rate, 0) < %(barrier_max_rate_vs_overall)s, FALSE)
+                AND r.rate / NULLIF(o.apply_rate, 0) < %(barrier_max_rate_vs_overall)s, FALSE),
+       n.skill_type, n.is_technical
 FROM rated r
 CROSS JOIN overall o
 JOIN skill_names n ON n.skill_ref = r.skill_ref
@@ -349,7 +372,7 @@ JOIN skill_names n ON n.skill_ref = r.skill_ref
 SHORTAGE_SQL = f"""
 INSERT INTO metrics.shortage_skill (week_end_date, snapshot_date, skill_ref, skill_name, is_mapped, is_casl,
     postings, shortage_postings, shortage_companies, top_company_share, shortage_share, overall_shortage_share, lift,
-    median_repost_count, median_applications)
+    median_repost_count, median_applications, skill_type, is_technical)
 WITH {_POOL_SKILL}, {_SKILL_NAMES}, {_top_company("is_shortage", direct_only=True)},
 overall AS (
     SELECT count(*) FILTER (WHERE is_shortage)::numeric / NULLIF(count(*), 0) AS share
@@ -376,7 +399,8 @@ SELECT %(e)s, %(s)s, p.skill_ref, n.skill_name, n.is_mapped, n.is_casl,
        round(p.shortage_postings::numeric / p.postings, 4),
        round(o.share, 4),
        round((p.shortage_postings::numeric / p.postings) / NULLIF(o.share, 0), 3),
-       round(p.median_reposts::numeric, 1), round(p.median_apps::numeric, 1)
+       round(p.median_reposts::numeric, 1), round(p.median_apps::numeric, 1),
+       n.skill_type, n.is_technical
 FROM per_skill p
 JOIN top_company t ON t.skill_ref = p.skill_ref
 CROSS JOIN overall o

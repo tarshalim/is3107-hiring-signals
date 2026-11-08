@@ -109,6 +109,16 @@ def test_barrier_list_is_only_skills_the_run_flagged():
     assert logic.carried_over(rows) == (1, 2)
 
 
+def test_technical_only_hides_soft_skills_unless_switched_off():
+    rows = logic.shortage_skills(_skills().assign(is_technical=[True, True, False, True, True]))
+    assert logic.technical_only(rows)["skill_ref"].tolist() == ["rev", "qs"]
+    assert logic.technical_only(rows, on=False)["skill_ref"].tolist() == ["rev", "qs", "pm"]
+    old_week = logic.shortage_skills(_skills())                         # built before 8 Nov: no is_technical
+    assert len(logic.technical_only(old_week)) == 3
+    assert len(logic.technical_only(old_week.assign(is_technical=None))) == 3
+    assert "is_technical" in VIEWS_SQL.split("CREATE OR REPLACE VIEW metrics.skill_signals")[1]
+
+
 def test_carried_over_is_unknown_in_the_first_week():
     first = _skills().assign(shortage_listed_prev_week=None)
     assert logic.carried_over(logic.shortage_skills(first)) is None
