@@ -118,10 +118,30 @@ def group_label(group_type: str, key: str, label: str) -> str:
 
 # --- weeks ----------------------------------------------------------------------------------------
 
+FULL_WEEK = 7       # snapshot days in a whole week; fewer is a partial week (the first: Sat 24 to Tue 27 Oct, 4)
+
+
+def partial_week(week, prev: bool = False) -> str | None:
+    """'data from Sat 24 Oct, 4 snapshots' when the week (or with prev, the week before it) had fewer than
+    FULL_WEEK snapshot days; None for a whole week, or when the run did not record them."""
+    n = week.get("prev_snapshots" if prev else "snapshots")
+    first = week.get("prev_first_snapshot_date" if prev else "first_snapshot_date")
+    if missing(n) or missing(first) or int(n) >= FULL_WEEK:
+        return None
+    first = pd.Timestamp(first)
+    return f"data from {first:%a} {first.day} {first:%b}, {int(n)} snapshot{'s' if int(n) != 1 else ''}"
+
+
+def last_week_name(week) -> str:
+    """'Last week', with the partial-week note when last week was partial (legends, ticks, table headers)."""
+    note = partial_week(week, prev=True) if week is not None else None
+    return f"Last week (partial: {note})" if note else "Last week"
+
+
 def week_label(week) -> str:
-    """The week selector's option text, e.g. 'Week ending Tue 3 Nov 2026'."""
+    """The week selector's option text, e.g. 'Week ending Tue 3 Nov 2026', '(partial)' added when it is."""
     end = pd.Timestamp(week["week_end_date"])
-    return f"Week ending {end:%a} {end.day} {end:%b %Y}"
+    return f"Week ending {end:%a} {end.day} {end:%b %Y}" + (" (partial)" if partial_week(week) else "")
 
 
 def week_caption(week) -> str:
@@ -130,6 +150,15 @@ def week_caption(week) -> str:
             f"snapshot: {int(week['pool_postings']):,} open postings.")
     if not week.get("snapshot_is_week_end", True):
         text += " The week's Tuesday snapshot was missing, so an earlier day was used."
+    note = partial_week(week)
+    if note:
+        text += (f" **Partial week** ({note}): collection had not covered the whole week, so the flow numbers "
+                 "(applications per day) rest on fewer days.")
+    prev_note = partial_week(week, prev=True) if has_previous(week) else None
+    if prev_note:
+        prev = pd.Timestamp(week["prev_week_end_date"])
+        text += (f" Last week (ending {prev.day} {prev:%b}) was a **partial week** ({prev_note}): read changes "
+                 "since last week with care.")
     return text
 
 

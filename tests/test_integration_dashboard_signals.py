@@ -36,12 +36,15 @@ def _test_dsn():
 
 
 def _seed(cur):
-    for week, status in ((W1, "ok"), (W2, "failed_checks"), (W3, "ok")):
+    # W1 is a partial week like the real first one (4 snapshot days, Sat to Tue); the others are whole
+    for week, status, days in ((W1, "ok", 4), (W2, "failed_checks", 7), (W3, "ok", 7)):
         cur.execute("""
             INSERT INTO metrics.run_log (week_end_date, week_start_date, snapshot_date, snapshot_is_week_end,
                 snapshots_in_week, pool_from_date, pool_to_date, thresholds, pool_postings, carried_forward, status)
-            VALUES (%(w)s, %(w)s - 6, %(w)s, TRUE, ARRAY[%(w)s], %(w)s - 2, %(w)s + 1, %(t)s, 1000, 10, %(s)s)
-        """, {"w": week, "t": json.dumps({"barrier_min_lift": 1.5}), "s": status})
+            VALUES (%(w)s, %(w)s - 6, %(w)s, TRUE,
+                    ARRAY(SELECT generate_series(%(w)s - %(d)s + 1, %(w)s, interval '1 day')::date ORDER BY 1 DESC),
+                    %(w)s - 2, %(w)s + 1, %(t)s, 1000, 10, %(s)s)
+        """, {"w": week, "d": days, "t": json.dumps({"barrier_min_lift": 1.5}), "s": status})
 
     # shortage: QS listed in W1 and W3; GL listed only in the failed W2 (must not count as "last week")
     for week, ref, name, lift in ((W1, "qs", "Quantity Surveying", 2.0), (W2, "gl", "General Ledger", 1.9),
@@ -156,6 +159,10 @@ def test_signal_weeks_skip_the_failed_week(conn):
     with conn.cursor() as cur:
         cur.execute("SELECT week_end_date, prev_week_end_date FROM metrics.signal_weeks ORDER BY 1")
         assert cur.fetchall() == [(W1, None), (W3, W1)]
+        # W1 is partial (4 snapshot days from Sat 24 Oct), and W3 knows its week before was
+        cur.execute("""SELECT snapshots, first_snapshot_date, prev_snapshots, prev_first_snapshot_date
+                       FROM metrics.signal_weeks ORDER BY week_end_date""")
+        assert cur.fetchall() == [(4, date(2026, 10, 24), None, None), (7, date(2026, 11, 4), 4, date(2026, 10, 24))]
 
 
 def test_skill_signals_line_up_every_signal(conn):

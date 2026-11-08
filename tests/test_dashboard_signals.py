@@ -79,6 +79,29 @@ def test_week_label_and_caption_name_the_snapshot():
     assert "missing" in logic.week_caption(fallback)
 
 
+def test_a_partial_week_is_marked_wherever_it_is_shown():
+    """8 Nov check: the 27 Oct week starts on Sat 24 Oct (4 snapshots), and nothing said so."""
+    first = pd.Series({"week_end_date": date(2026, 10, 27), "week_start_date": date(2026, 10, 21),
+                       "snapshot_date": date(2026, 10, 27), "snapshot_is_week_end": True, "pool_postings": 90655,
+                       "snapshots": 4, "first_snapshot_date": date(2026, 10, 24), "prev_week_end_date": None,
+                       "prev_snapshots": None, "prev_first_snapshot_date": None})
+    assert logic.partial_week(first) == "data from Sat 24 Oct, 4 snapshots"
+    assert logic.week_label(first) == "Week ending Tue 27 Oct 2026 (partial)"
+    assert "**Partial week** (data from Sat 24 Oct, 4 snapshots)" in logic.week_caption(first)
+    assert logic.last_week_name(first) == "Last week"
+    second = pd.Series({"week_end_date": date(2026, 11, 3), "week_start_date": date(2026, 10, 28),
+                        "snapshot_date": date(2026, 11, 3), "snapshot_is_week_end": True, "pool_postings": 88667,
+                        "snapshots": 7, "first_snapshot_date": date(2026, 10, 28),
+                        "prev_week_end_date": date(2026, 10, 27), "prev_snapshots": 4,
+                        "prev_first_snapshot_date": date(2026, 10, 24)})
+    assert logic.partial_week(second) is None and logic.week_label(second) == "Week ending Tue 3 Nov 2026"
+    caption = logic.week_caption(second)
+    assert "Last week (ending 27 Oct) was a **partial week** (data from Sat 24 Oct, 4 snapshots)" in caption
+    assert logic.last_week_name(second) == "Last week (partial: data from Sat 24 Oct, 4 snapshots)"
+    # a run from before 8 Nov (no snapshot counts) is not called partial
+    assert logic.partial_week(pd.Series({"snapshots": None, "first_snapshot_date": None})) is None
+
+
 def test_thresholds_come_from_the_run_with_defaults_for_older_runs():
     week = pd.Series({"thresholds": {"barrier_min_lift": 2.0}, "prev_week_end_date": None})
     t = logic.thresholds(week)

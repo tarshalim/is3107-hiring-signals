@@ -20,8 +20,9 @@ def _tile(col, label: str, verdict: dict):
         st.caption(verdict["caption"])
 
 
-def _history(row) -> pd.DataFrame:
-    """This week against last week for the signals that have both."""
+def _history(row, last_week: str = "Last week") -> pd.DataFrame:
+    """This week against last week for the signals that have both (last_week: the column title, which says
+    when last week was partial)."""
     def fmt(value, kind):
         if logic.missing(value):
             return "n/a"
@@ -32,13 +33,14 @@ def _history(row) -> pd.DataFrame:
         ("Applications per posting per day", fmt(row["apps_per_posting_day_24h"], "n"),
          fmt(row["apps_per_posting_day_24h_prev_week"], "n")),
     ]
-    return pd.DataFrame(lines, columns=["Signal", "This week", "Last week"])
+    return pd.DataFrame(lines, columns=["Signal", "This week", last_week])
 
 
 def render(week):
     st.subheader("Skill lookup")
     st.caption("Pick a skill to see every weekly signal for it: is it in demand, what does it pay, is it short, "
-               "do people avoid its postings, how many others apply? Skills with 100+ open postings.")
+               "do people avoid its postings, how many others apply? Skills with 100+ open postings."
+               + (f" **Partial week** ({logic.partial_week(week)})." if logic.partial_week(week) else ""))
     skills = sq.skill_signals(week["week_end_date"])
     if skills.empty:
         st.info("No skill signals for this week.")
@@ -69,5 +71,7 @@ def render(week):
 
     if logic.has_previous(week):
         prev = pd.Timestamp(week["prev_week_end_date"])
-        st.markdown(f"**This week against the week ending {prev.day} {prev:%b}**")
-        st.dataframe(_history(row), width="stretch", hide_index=True)
+        note = logic.partial_week(week, prev=True)
+        st.markdown(f"**This week against the week ending {prev.day} {prev:%b}**"
+                    + (f" (a partial week: {note})" if note else ""))
+        st.dataframe(_history(row, logic.last_week_name(week)), width="stretch", hide_index=True)

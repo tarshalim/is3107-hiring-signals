@@ -24,7 +24,13 @@ SELECT week_end_date,
        pool_postings,
        carried_forward,
        thresholds,
-       lag(week_end_date) OVER (ORDER BY week_end_date) AS prev_week_end_date
+       lag(week_end_date) OVER (ORDER BY week_end_date) AS prev_week_end_date,
+       -- added last: how many snapshot days the week had and the first one, for this week and the week before.
+       -- Fewer than 7 is a partial week (the first, ending 27 Oct, starts on Sat 24 Oct: 4 snapshots)
+       cardinality(snapshots_in_week)                                 AS snapshots,
+       (SELECT min(d) FROM unnest(snapshots_in_week) d)               AS first_snapshot_date,
+       lag(cardinality(snapshots_in_week)) OVER (ORDER BY week_end_date) AS prev_snapshots,
+       lag((SELECT min(d) FROM unnest(snapshots_in_week) d)) OVER (ORDER BY week_end_date) AS prev_first_snapshot_date
 FROM metrics.run_log
 WHERE status = 'ok';
 

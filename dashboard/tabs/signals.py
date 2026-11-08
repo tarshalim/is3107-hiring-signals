@@ -50,7 +50,7 @@ def render(week):
     _shortage(shortage, labels, t)
     _barrier(barrier, labels, t)
     _unrealistic(unreal, t)
-    _competitiveness(comp, t)
+    _competitiveness(comp, t, week)
 
 
 # --- headline -------------------------------------------------------------------------------------
@@ -379,9 +379,10 @@ def _pay_chart(rows, flag: str, order: list):
 
 # --- competitiveness ------------------------------------------------------------------------------
 
-def _apps_chart(rows, overall, title: str, overall_line: bool):
-    """Applications per posting per day as bars with the value written at the end, last week's value as a tick,
-    and the all-postings value as a line (overall_line) or in the axis title."""
+def _apps_chart(rows, overall, title: str, overall_line: bool, last_week: str = "Last week"):
+    """Applications per posting per day as bars with the value written at the end, last week's value as a tick
+    (named last_week: it says when last week was partial), and the all-postings value as a line (overall_line)
+    or in the axis title."""
     values = rows["apps_per_posting_day_24h"]
     digits = 2 if values.min() >= 0.1 else 3
     fig = go.Figure()
@@ -392,8 +393,8 @@ def _apps_chart(rows, overall, title: str, overall_line: bool):
                                        "<br>%{customdata[1]:,} open postings<extra></extra>"))
     prev = rows["apps_per_posting_day_24h_prev_week"]
     if prev.notna().any():
-        fig.add_trace(go.Scatter(x=prev, y=rows["label"], mode="markers", name="Last week", marker=LAST_WEEK,
-                                 hovertemplate="%{y}<br>Last week %{x:.3f}<extra></extra>"))
+        fig.add_trace(go.Scatter(x=prev, y=rows["label"], mode="markers", name=last_week, marker=LAST_WEEK,
+                                 hovertemplate="%{y}<br>" + last_week + " %{x:.3f}<extra></extra>"))
     subtitle = None
     if overall is not None:
         if overall_line:
@@ -416,10 +417,13 @@ def _labelled(rows, group_type: str):
     return rows.assign(label=[f"{lab} ({k})" if d else lab for lab, k, d in zip(rows["label"], rows["group_key"], dupes)])
 
 
-def _competitiveness(comp, t):
+def _competitiveness(comp, t, week):
     st.markdown("#### 4. Competition: applications per posting per day")
+    last_week = logic.last_week_name(week)
     st.caption("Applications gained during the week per open posting, per 24 hours. Low means few applicants for "
-               "each opening: hard to fill for employers, less competition for jobseekers. The tick is last week.")
+               "each opening: hard to fill for employers, less competition for jobseekers. The tick is last week"
+               + (f", a partial week ({logic.partial_week(week, prev=True)}): its values rest on fewer days."
+                  if last_week != "Last week" else "."))
     if comp.empty:
         st.info("No competitiveness rows this week.")
         return
@@ -433,7 +437,7 @@ def _competitiveness(comp, t):
         if groups.empty:
             st.info("No occupation group has enough postings.")
         else:
-            st.plotly_chart(_apps_chart(groups, overall, "By occupation group (SSOC major group)", True),
+            st.plotly_chart(_apps_chart(groups, overall, "By occupation group (SSOC major group)", True, last_week),
                             width="stretch")
             st.caption(f"Groups with {t['group_min_postings']}+ open postings.")
     with right:
@@ -448,7 +452,7 @@ def _competitiveness(comp, t):
         # the first row is drawn at the bottom, so reverse: the most extreme occupation ends up on top
         occ = occ.sort_values("apps_per_posting_day_24h", ascending=side == "Fewest applicants").head(SHOWN)
         occ = _labelled(occ.iloc[::-1], "ssoc")
-        st.plotly_chart(_apps_chart(occ, overall, f"Occupations with the {side.lower()}", side == "Most applicants"),
-                        width="stretch")
+        st.plotly_chart(_apps_chart(occ, overall, f"Occupations with the {side.lower()}", side == "Most applicants",
+                                    last_week), width="stretch")
         st.caption(f"{side} among {int((comp['group_type'] == 'ssoc').sum()):,} occupations with "
                    f"{t['group_min_postings']}+ open postings, keeping those with {int(min_n):,}+.")

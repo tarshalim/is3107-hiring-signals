@@ -14,10 +14,12 @@ WEEKS_TTL = 600            # a new week appears within 10 minutes of the weekly 
 
 @st.cache_data(ttl=WEEKS_TTL, show_spinner=False)
 def weeks():
-    """Finished weeks, newest first, with the snapshot used and the finished week before each."""
+    """Finished weeks, newest first, with the snapshot used, the finished week before each, and how many snapshot
+    days each of the two had (fewer than 7: a partial week)."""
     return run_query("""
         SELECT week_end_date, week_start_date, snapshot_date, snapshot_is_week_end, fallback_reason,
-               pool_postings, carried_forward, thresholds, prev_week_end_date
+               pool_postings, carried_forward, thresholds, prev_week_end_date,
+               snapshots, first_snapshot_date, prev_snapshots, prev_first_snapshot_date
         FROM metrics.signal_weeks
         ORDER BY week_end_date DESC
     """)
