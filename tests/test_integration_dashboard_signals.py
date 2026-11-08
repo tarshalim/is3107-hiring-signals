@@ -171,6 +171,7 @@ def test_skill_signals_line_up_every_signal(conn):
     assert float(qs["overall_apps_per_posting_day_24h"]) == pytest.approx(0.35)
     assert float(qs["apps_per_posting_day_24h_prev_week"]) == pytest.approx(0.06)
     assert qs["is_technical"] is True and rows["sm"]["is_technical"] is None      # sm: no shortage or barrier row
+    assert qs["shortage_base_postings"] == 1333 and rows["sm"]["shortage_base_postings"] is None
 
 
 def test_last_week_means_the_last_finished_week(conn):

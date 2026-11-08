@@ -219,7 +219,8 @@ def _lift_chart(rows, labels: dict, lift_col: str, n_col: str, firms_col: str, x
                  category_orders={"stability": [logic.STABLE, logic.NEW, logic.FIRST]},
                  hover_data={"label": False, "text": False, "stability": False, **hover},
                  labels={lift_col: x_title, "label": "", "stability": "",
-                         "open_postings": "Open postings with the skill", n_col: "Flagged postings",
+                         "open_postings": "Open postings with the skill",
+                         "shortage_base_postings": "Direct employers' postings with the skill", n_col: "Flagged postings",
                          firms_col: "Employers behind them", "shortage_top_company_share": "Biggest employer's share",
                          "barrier_share": "Share that are barrier postings",
                          "barrier_expected_share": "Share expected from similar jobs"})
@@ -240,7 +241,8 @@ def _table(rows, labels: dict, columns: dict):
 
 def _shortage(rows, labels: dict, t):
     st.markdown("#### 1. Shortage: employers repost, nobody applies")
-    st.caption(f"How many times more likely a skill's postings are than the average posting to be reposted "
+    st.caption(f"How many times more likely a skill's postings are than the average direct employer's posting to be "
+               f"reposted "
                f"{t['shortage_min_reposts']}+ times with at most {t['shortage_max_applications']} applications. "
                f"Listed from {t['shortage_min_lift']}x, with {t['shortage_min_flagged']}+ such postings from "
                f"{t['min_companies']}+ employers, with "
@@ -251,11 +253,16 @@ def _shortage(rows, labels: dict, t):
         st.info("No skill meets the shortage minimums this week.")
         return
     st.plotly_chart(_lift_chart(rows, labels, "shortage_lift", "shortage_postings", "shortage_companies",
-                                "Times as likely as the average posting", "average posting",
-                                {"open_postings": ":,", "shortage_top_company_share": ":.0%"}), width="stretch")
+                                "Times as likely as the average direct employer's posting",
+                                "average direct employer's posting",
+                                {"shortage_base_postings": ":,", "shortage_top_company_share": ":.0%"}),
+                    width="stretch")
+    st.caption("Lift = shortage postings / direct employers' postings with the skill, divided by the same share over "
+               "all direct employers' postings.")
     with st.expander(f"All {len(rows)} listed shortage skills"):
         _table(rows, labels, {"shortage_lift": "Lift", "shortage_postings": "Shortage postings",
-                              "shortage_companies": "Employers", "open_postings": "Open postings",
+                              "shortage_base_postings": "Direct employers' postings",
+                              "shortage_companies": "Employers",
                               "shortage_lift_prev_week": "Lift last week", "stability": "Stability"})
 
 

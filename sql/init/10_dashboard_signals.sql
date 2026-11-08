@@ -108,7 +108,9 @@ SELECT s.week_end_date,
        b.rate_vs_overall    AS barrier_rate_vs_overall,
        -- a technical skill (SkillsFuture 'tsc', or an unmapped tag that is not a trait or attitude): the default
        -- view of the shortage and barrier lists. NULL when the skill has neither row
-       COALESCE(b.is_technical, sh.is_technical) AS is_technical
+       COALESCE(b.is_technical, sh.is_technical) AS is_technical,
+       -- the shortage lift's base: postings with the skill by direct employers (open_postings counts agencies too)
+       sh.postings          AS shortage_base_postings
 FROM skills s
 JOIN metrics.signal_weeks w ON w.week_end_date = s.week_end_date
 LEFT JOIN metrics.barrier_skill b   ON b.week_end_date = s.week_end_date AND b.skill_ref = s.skill_ref

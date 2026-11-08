@@ -119,6 +119,16 @@ def test_technical_only_hides_soft_skills_unless_switched_off():
     assert "is_technical" in VIEWS_SQL.split("CREATE OR REPLACE VIEW metrics.skill_signals")[1]
 
 
+def test_shortage_chart_shows_the_direct_employer_base_of_the_lift():
+    """8 Nov check: the chart showed all open postings (Spa 494) while the lift rests on direct employers' (329)."""
+    view = VIEWS_SQL.split("CREATE OR REPLACE VIEW metrics.skill_signals")[1]
+    assert "sh.postings          AS shortage_base_postings" in view
+    tab = (REPO / "dashboard" / "tabs" / "signals.py").read_text(encoding="utf-8")
+    shortage = tab.split("def _shortage(")[1].split("def _barrier(")[0]
+    assert "shortage_base_postings" in shortage and '"open_postings"' not in shortage
+    assert "the average posting" not in shortage and "average direct employer's posting" in shortage
+
+
 def test_carried_over_is_unknown_in_the_first_week():
     first = _skills().assign(shortage_listed_prev_week=None)
     assert logic.carried_over(logic.shortage_skills(first)) is None
