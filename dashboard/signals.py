@@ -200,7 +200,7 @@ def technical_only(rows: pd.DataFrame, on: bool = True) -> pd.DataFrame:
     and is returned whole."""
     if not on or "is_technical" not in rows or rows["is_technical"].isna().all():
         return rows
-    return rows[rows["is_technical"].fillna(False).astype(bool)]
+    return rows[rows["is_technical"].eq(True)]       # NULL (no shortage or barrier row) counts as not technical
 
 
 def carried_over(rows: pd.DataFrame) -> tuple[int, int] | None:
