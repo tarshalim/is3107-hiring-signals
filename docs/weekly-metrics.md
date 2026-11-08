@@ -223,7 +223,7 @@ tags: Packaging is in 1,001 open postings from 458 employers, draws average view
 per 100 views against 7.2 overall (`rate_vs_overall` 0.45). The 4 Nov review read this as an occupation effect,
 which is why barrier skills are now judged within similar jobs (2-digit SSOC groups, 1-digit as fallback).
 
-### Skill salary check (week ending 3 Nov, run 8 Nov)
+### Skill salary check (weeks ending 27 Oct and 3 Nov, run 8 Nov)
 
 Project Resources topped `skill_salary` at a median $14,000, and 54 of its 109 salaried postings were one
 recruiter's $10-18k site manager ads. Two rules from shortage and barrier now apply to skill pay as well: no
@@ -264,8 +264,23 @@ against new (per employer):
 Project Resources falls from $14,000 to $6,000 (46 employers) and Direct experience from $9,250 to $5,250
 (59 employers): both had been lifted by one bulk poster. Family Medicine moves the other way, from $5,750 to
 the top in both weeks (46 and 49 employers): one recruiter posted 45 and 54 of its salaried postings at a
-median $5,750, which set the old median; the other employers, mostly with a posting or two each, pay more. The market median the ratios compare with barely moves (about $4,000). Ties are
-ordered by postings.
+median $5,750, which set the old median; the other employers, mostly with a posting or two each, pay more.
+The market median the ratios compare with barely moves (about $4,000). Ties are ordered by postings.
+
+What changed with it (commit `97c3f85`):
+
+- `metrics.skill_salary`: the median minimum, median maximum, and P25, median and P75 of the midpoint are all
+  taken across employers' own medians. `mid_vs_overall` compares with the market median weighted the same way.
+  The rules are unchanged: 100+ salaried postings, 10+ employers, no employer above half of them.
+- New column `companies` (employers behind the salaried postings), next to `postings`. An existing warehouse
+  gets it from the upgrade block at the end of `05_metrics_signals.sql`; weeks not rerun read 0.
+- `metrics.skill_signals` gains `salary_companies` (`10_dashboard_signals.sql`). The Skill lookup "Pay" tile
+  says the figure is across the skill's employers, each counted once.
+- The Salary tab is unchanged: it reads `mart.skill_salary_latest`, which still takes medians per posting.
+- Deployed on 8 Nov: `05` and `10` applied to the warehouse, then
+  `python -m metrics.run --week-ending 2026-10-27 2026-11-03`. Both weeks finished with status `ok`:
+  2,239 skills (27 Oct) and 2,208 (3 Nov), one fewer each than before because of the 10-employer
+  minimum.
 
 ## 6. Limitations
 
