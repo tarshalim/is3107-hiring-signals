@@ -229,8 +229,9 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
     assert _one(conn, "SELECT min(salary_mid_median), max(salary_mid_median) FROM metrics.skill_salary WHERE week_end_date = %s",
                 D3) == (Decimal("3850.00"), Decimal("3850.00"))
     # g's $12 to $15 "monthly" salary is left out: Collaboration has 5 open postings but 4 usable salaries
-    assert _one(conn, "SELECT postings FROM metrics.skill_salary WHERE week_end_date = %s AND skill_name = 'Collaboration'",
-                D3) == (4,)
+    # (every fixture posting is from one employer, so the employer-weighted median is that employer's median)
+    assert _one(conn, "SELECT postings, companies FROM metrics.skill_salary WHERE week_end_date = %s "
+                      "AND skill_name = 'Collaboration'", D3) == (4, 1)
     assert _one(conn, "SELECT salary_usable FROM metrics.posting_week WHERE week_end_date = %s AND job_uuid = %s",
                 D3, "g" * 32) == (False,)
 

@@ -226,14 +226,22 @@ def test_a_shortage_skill_needs_the_same_minimum_lift_as_a_barrier_skill():
 
 def test_one_bulk_employer_cannot_make_a_skills_pay():
     """8 Nov check: Project Resources topped the skill salary list at $14,000 from 54 of 109 postings by one
-    recruiter. Same cap as shortage and barrier, over the skill's postings with a usable salary."""
+    recruiter. Same cap and employer minimum as shortage and barrier, over the skill's postings with a usable
+    salary, and the pay is employer-weighted: each employer's median first, then the median across employers."""
     salary = " ".join(build_week.SKILL_SALARY_SQL.split())
     assert "SELECT job_uuid, company_name, vacancies" in salary
     assert "JOIN paid p ON p.job_uuid = ps.job_uuid GROUP BY ps.skill_ref, p.company_name" in salary
-    assert salary.endswith("WHERE t.top_n::numeric / p.postings <= %(max_top_company_share)s")
-    assert "mid_vs_overall, top_company_share)" in salary
-    assert "top_company_share" in _table_blocks(SCHEMA)["skill_salary"]
+    assert "HAVING sum(n) >= %(salary_min_postings)s AND count(*) >= %(min_companies)s" in salary
+    # every percentile of the skill is over the employers' medians, and so is the market it is compared with
+    assert "FROM per_employer GROUP BY skill_ref" in salary
+    assert "percentile_cont(ARRAY[0.25, 0.5, 0.75]) WITHIN GROUP (ORDER BY mid_med) AS mid_q" in salary
+    assert "FROM paid GROUP BY company_name) e" in salary
+    assert salary.endswith("WHERE p.top_n::numeric / p.postings <= %(max_top_company_share)s")
+    assert "is_mapped, postings, companies, vacancies," in salary and "mid_vs_overall, top_company_share)" in salary
+    cols = _table_blocks(SCHEMA)["skill_salary"]
+    assert "top_company_share" in cols and "companies" in cols
     assert "ALTER TABLE metrics.skill_salary ADD COLUMN IF NOT EXISTS top_company_share" in SCHEMA
+    assert "ALTER TABLE metrics.skill_salary ADD COLUMN IF NOT EXISTS companies" in SCHEMA
 
 
 def test_shortage_reads_direct_employers_only():

@@ -2,12 +2,14 @@
 
 One DAG, `weekly_metrics` (`dags/weekly_metrics_dag.py`), fills the `metrics` schema once a week. It reads only
 `clean` and writes only `metrics` (Dr Lek: results are loaded to a separate location and read from there). The
-Streamlit dashboard reads its own precomputed layer, not these tables: the analysis tabs read the `mart`
-materialized views (`sql/init/07_dashboard_marts.sql`, rebuilt by the daily transform), the salary estimator reads
-its stored model in `ml`, the sidebar reads `clean.ref_ssoc` for occupation labels, and the Pipeline health tab
-reads the run logs (`raw.ingest_runs`, `clean.load_log`, `clean.dq_results`, `ops.alert_log`), the skill match
-counts in `clean.dim_skill` and the latest day in `clean.fact_job_day`. The DAG has two independent branches that
-share one week and one snapshot:
+Streamlit dashboard's three weekly tabs (Hiring signals, Skill lookup, Market check) read these tables, through
+the views `metrics.signal_weeks` and `metrics.skill_signals` (`sql/init/10_dashboard_signals.sql`) for the week
+picked in the sidebar, and Market check reads `metrics.mcf_vs_mom_share`. The daily tabs read their own
+precomputed layer: the `mart` materialized views (`sql/init/07_dashboard_marts.sql`, rebuilt by the daily
+transform), the salary estimator's stored model in `ml`, and for Pipeline health the run logs (`raw.ingest_runs`,
+`clean.load_log`, `clean.dq_results`, `ops.alert_log`). The one link back is Trending skills, which takes the
+generic and soft skill tag lists from the latest finished `metrics.run_log` so it drops the same tags. The DAG has
+two independent branches that share one week and one snapshot:
 
 ```
 refresh_mom_stats -> compare_mcf_with_mom                       metrics.mcf_vs_mom_share  (sql/init/03_mom_vacancies.sql)
@@ -76,14 +78,14 @@ every run in `run_log.thresholds.generic_skill_tags`. To change it, edit the CSV
 | Table | One row per | What it answers | How to read it |
 |---|---|---|---|
 | `run_log` | week | Did the run work, from which snapshot? | `snapshot_date`, `fallback_reason`, `pool_postings`, `carried_forward`, `status` (`ok` or `failed_checks`), `steps` (rows and seconds per table), `checks` |
-| `posting_week` | open posting at the week end | The base of every signal (a periodic snapshot fact) | Attributes of the posting version live on `last_seen_date`, its running totals, `apps_per_day_since_posting`, `views_per_day_since_posting`, `salary_usable`, `mom_group`, and five flags: `is_shortage`, `is_reposted_many_apps`, `is_barrier_posting`, `is_entry_2plus` ("Fresh/entry level" asking 2+ years) and `is_junior_2plus` ("Junior Executive" asking 2+ years; one column for both until 4 Nov). `posted_by_agency`: the poster's SSIC 2020 code starts with 78 (employment agencies, 42% of open postings on 3 Nov). About 61 MB a week |
+| `posting_week` | open posting at the week end | The base of every signal (a periodic snapshot fact) | Attributes of the posting version live on `last_seen_date`, its running totals, `apps_per_day_since_posting`, `views_per_day_since_posting`, `salary_usable`, `mom_group`, and five flags: `is_shortage`, `is_reposted_many_apps`, `is_barrier_posting`, `is_entry_2plus` ("Fresh/entry level" asking 2+ years) and `is_junior_2plus` ("Junior Executive" asking 2+ years; one column for both until 4 Nov). `posted_by_agency`: the poster's SSIC 2020 code starts with 78 (employment agencies, 43% of open postings on 3 Nov). About 61 MB a week |
 | `barrier_skill` | skill | Which skills sit in postings people look at a lot and then do not apply to, compared with similar jobs? | A posting is a barrier posting (`posting_week.is_barrier_posting`) when its views per day since first posted are at or above the P75 of its comparison group (`posting_week.barrier_group`), and its applications per view are at most 0.8 times the group's. The comparison group is the posting's 2-digit SSOC group (for example 24, business and administration professionals) when that group has 200+ open postings that week, else its 1-digit major group (on 3 Nov: 31 two-digit groups, 6 fallbacks, 573 postings on a fallback). `barrier_share` = the skill's barrier postings / its postings. `expected_share` = the share if each of those postings behaved like the average posting of its own comparison group. `lift` = `barrier_share` / `expected_share`. `is_barrier` = lift 1.5 or more, with 25+ barrier postings from 10+ employers, and `top_company_share` (the share of those barrier postings from the skill's single biggest employer) at most 0.5, and `rate_vs_overall` below 1: the skill's postings get fewer applications per view than all open postings, not only than similar jobs (since 7 Nov; before, 9 of the top 15 were accounting skills such as General Ledger at 1.43 times the market's applications per view, low only next to clerical jobs, the most applied-to group). Per day so old postings are not favoured, within the group so an occupation's own pattern (cleaners and drivers get many views and few applications whatever the skill) is not read as a skill barrier. Until 4 Nov this used raw views per posting against all postings. `apply_rate` and `rate_vs_overall` stay as descriptive columns. Only skills in 100+ postings from 10+ employers |
-| `shortage_skill` | skill | Which skills sit in postings reposted again and again with few applicants? | A posting is a shortage posting when it was reposted twice (the highest count seen) and has at most 2 applications in total (totals carry over a repost, so this is the conservative side). **Direct employers only** (since 7 Nov): postings by employment agencies (`posted_by_agency`) are left out of every count, because agencies keep evergreen ads up and repost them; on 3 Nov they were 42% of open postings but 60% of shortage postings (3.6% of theirs against 1.8%), and one agency alone made a third of all shortage postings. `lift` = share of the skill's postings that are shortage postings / the same share over all open postings by direct employers. Only skills with 25+ shortage postings from 10+ employers (on 25 Oct "Aircraft Systems" had 40 shortage postings from one employer), and no single employer behind more than half of them (`top_company_share` at most 0.5). `median_repost_count` and `median_applications` describe the skill's shortage postings only. `is_casl` lets the report compare with SSG's own list of skills needed by growth jobs |
+| `shortage_skill` | skill | Which skills sit in postings reposted again and again with few applicants? | A posting is a shortage posting when it was reposted twice (the highest count seen) and has at most 2 applications in total (totals carry over a repost, so this is the conservative side). **Direct employers only** (since 7 Nov): postings by employment agencies (`posted_by_agency`) are left out of every count, because agencies keep evergreen ads up and repost them; on 3 Nov they were 43% of open postings but 60% of shortage postings (3.6% of theirs against 1.8%), and one agency alone made a third of all shortage postings. `lift` = share of the skill's postings that are shortage postings / the same share over all open postings by direct employers. Only skills with 25+ shortage postings from 10+ employers (on 25 Oct "Aircraft Systems" had 40 shortage postings from one employer), and no single employer behind more than half of them (`top_company_share` at most 0.5). `median_repost_count` and `median_applications` describe the skill's shortage postings only. `is_casl` lets the report compare with SSG's own list of skills needed by growth jobs |
 | `unrealistic_requirements` | flag and group | Which entry-level jobs ask for 2+ years? Which jobs are reposted despite many applicants? | Three flags, read in this order. `entry_level_2plus_years` (the lead finding): "Fresh/entry level" asking 2 to 30 years (above 30 are typing errors); on 3 Nov 6.3%, paid about the same as other entry-level postings (+1%), so the clearest unrealistic ask. `junior_2plus_years`: the same for "Junior Executive", kept apart because the share is seven times higher (47% on 3 Nov), but these pay 21% more than other Junior Executive postings, so they read more as mid-level roles labelled junior than as an unrealistic ask. `reposted_many_apps` (a minor signal): reposted and at or above the week's P90 of applications per day since first posted (per day, so a posting is not flagged just for being old: until 4 Nov this was the P90 of total applications, 23, which mostly picked postings open 50 to 94 days); **direct employers only** since 8 Nov, as for shortage (its top posters were agencies), while the P90 is still over all open postings. Groups: `overall`, `category`, `ssoc_major_group`, `position_level`. `flagged_share`, and the median salary of flagged against other postings. `rule` spells out the rule with this week's numbers |
 | `competitiveness` | group | Which roles and skills get the most applicants per day? | Stock: `median_apps_per_day_since_posting` = applications so far / days since the original posting date, per open posting. Flow: `apps_per_posting_day_24h` = applications gained this week per posting per 24 hours, and `apply_rate_flow` = applications gained / views gained. Groups: `overall`, `mom_group` (the same Split A groups as `metrics.mcf_vs_mom_share`), `ssoc_major_group`, `ssoc` (occupation), `category`, `skill` |
 | `skill_demand` | skill and posting week | Which skills are rising? | Postings per skill by the Monday of their original posting date (a calendar week, not the Wednesday to Tuesday run week), from every posting seen up to the snapshot (open or since closed), for the last 6 posting weeks. Compare weeks with `share_of_week` (the skill's share of that week's postings), not raw counts. `skill_type` is the SkillsFuture type, `tsc` (technical skill) or `ccs` (critical core skill), so technical skills can be shown apart; it is empty for MCF tags not mapped to SkillsFuture. Use only rows with `week_fully_observed = true` for trends: weeks before collection began only contain postings that were still open on 24 Oct |
 | `group_signals` | group | Which cause shows up where? | Per job category and SSOC major group (and `overall`): `shortage_share` (of direct employers' postings), `barrier_share`, `entry_2plus_share` (of entry-level postings with a usable experience value), `agency_share` and the median salary, each from the same `posting_week` flags as the skill tables. Applications per day for the same groups are in `competitiveness` (same `group_type` and `group_key`). Groups below 30 postings are left out, and a share whose base is below 30 is NULL. Feeds the summary grid of the Hiring signals tab |
-| `skill_salary` | skill | What do postings asking for the skill pay? | Monthly salary as advertised, open postings with a usable salary only: median minimum, median maximum, P25, median and P75 of the midpoint, and `mid_vs_overall`. Usable means a minimum of at least $300 and a maximum of at most $100,000: below are hourly or daily rates typed into the monthly field (1,395 postings on 25 Oct, for example $12 to $24 "a month" for a packing job) and placeholders like $1, above are annual figures |
+| `skill_salary` | skill | What do postings asking for the skill pay? | Monthly salary as advertised, open postings with a usable salary only, **employer-weighted** (since 8 Nov): each employer's median first, then the median across employers, so a recruiter with 54 ads counts once. Median minimum, median maximum, P25, median and P75 of the midpoint, all across employers, and `mid_vs_overall` against the market median weighted the same way. `postings` and `companies` (employers) give the sample. Only skills with 100+ such postings from 10+ employers, none above half of them. Usable means a minimum of at least $300 and a maximum of at most $100,000: below are hourly or daily rates typed into the monthly field (1,395 postings on 25 Oct, for example $12 to $24 "a month" for a packing job) and placeholders like $1, above are annual figures |
 
 The MOM validation (does MCF look like the wider vacancy market?) is `metrics.mcf_vs_mom_share`, written by
 `compare_mcf_with_mom` from the same snapshot: per MOM occupation group, MCF's share of postings against MOM's
@@ -100,8 +102,8 @@ Stored with every run in `metrics.run_log.thresholds`. Change them in `metrics/b
 | Postings with a usable salary, per skill (`skill_salary`) | 100 | a stable median: with 30 the top medians on 3 Nov came from 32 to 34 postings |
 | Postings per skill across the demand window | 30 | keeps the table to skills with a real series |
 | Shortage postings carrying a skill | 25 | from the metrics design |
-| Employers behind a barrier skill, or behind a skill's shortage postings | 10 | before this rule the top four shortage skills on 25 Oct each came from a single employer; with 5, Metal Fabrication (57 shortage postings) and Product Management (85) on 3 Nov each came from 5 firms |
-| Biggest employer's share of a skill's barrier or shortage postings | at most 0.5 | 10 employers can still be one bulk poster plus nine with a posting each. Stored as `top_company_share` |
+| Employers behind a barrier skill, a skill's shortage postings, or its salaried postings (`skill_salary`, since 8 Nov) | 10 | before this rule the top four shortage skills on 25 Oct each came from a single employer; with 5, Metal Fabrication (57 shortage postings) and Product Management (85) on 3 Nov each came from 5 firms |
+| Biggest employer's share of a skill's barrier, shortage or salaried postings | at most 0.5 | 10 employers can still be one bulk poster plus nine with a posting each. Stored as `top_company_share` |
 | Usable monthly salary | $300 to $100,000 | hourly or daily rates below, annual figures above |
 | Barrier posting | views per day at or above the comparison group's P75, applications per view at most 0.8 of the group's; the group is the 2-digit SSOC group if it has 200+ postings, else the 1-digit major group | the most-viewed quarter of similar jobs, with at least 20% fewer applications per view than similar jobs |
 | Barrier skill | lift 1.5 or more, 25+ barrier postings, applications per view below the market's (`barrier_max_rate_vs_overall` 1.0) | half again as common as its occupations predict; the same flagged-posting minimum as shortage; and people really do apply less, not only less than in a crowded occupation |
@@ -151,7 +153,7 @@ on that day, same rule as `python -m transform.mom_vacancies --week-ending`; nee
 values). If the clean layer is ever rebuilt, rerun the weeks.
 
 For the video: Graph View shows the two branches: the MOM download and comparison, and the snapshot pick,
-`build_posting_week`, the fan-out of six tables and the fan-in to `check_and_log`.
+`build_posting_week`, the fan-out of seven signal tables and the fan-in to `check_and_log`.
 
 ## 4. Checks (in `metrics.run_log.checks`)
 
@@ -160,7 +162,7 @@ outside 0 to 1, a negative rate. `warn` is recorded only: a signal table with no
 postings carried over a crawl skip, a snapshot that is not the week's Tuesday, a snapshot that failed a daily
 data-quality check. `info` puts the 24-hour application rate and the observed days per posting on record.
 
-## 5. Validation on real data (24 and 25 Oct)
+## 5. Validation on real data (24 and 25 Oct; first validation run, old definitions)
 
 Run on 3 Nov 2026 on Brian's laptop in a throwaway Postgres 16 container, not the team's warehouse: the schema
 applied to an empty database, reference files loaded, the 24 and 25 Oct files replayed with
@@ -221,10 +223,54 @@ tags: Packaging is in 1,001 open postings from 458 employers, draws average view
 per 100 views against 7.2 overall (`rate_vs_overall` 0.45). The 4 Nov review read this as an occupation effect,
 which is why barrier skills are now judged within similar jobs (2-digit SSOC groups, 1-digit as fallback).
 
+### Skill salary check (week ending 3 Nov, run 8 Nov)
+
+Project Resources topped `skill_salary` at a median $14,000, and 54 of its 109 salaried postings were one
+recruiter's $10-18k site manager ads. Two rules from shortage and barrier now apply to skill pay as well: no
+employer may post more than half of a skill's salaried postings (`max_top_company_share`), and the postings must
+come from at least 10 employers (`min_companies`). The week was rebuilt with both rules inside a transaction that
+was then rolled back:
+
+| # | Skill | Postings | Median monthly pay | vs market | Biggest employer's share | Employers |
+|---|---|---|---|---|---|---|
+| 1 | Project Resources | 109 | $14,000 | 3.46x | 49.5% | 46 |
+| 2 | Enterprise Architecture | 108 | $10,500 | 2.59x | 5.6% | 75 |
+| 3 | Solution Architecture | 193 | $10,000 | 2.47x | 5.7% | 123 |
+| 4 | Direct experience | 136 | $9,250 | 2.28x | 36.0% | 59 |
+| 5 | AI Agents | 182 | $9,000 | 2.22x | 4.4% | 127 |
+
+The top 5 did not change. `min_companies` dropped 1 of 2,209 skills, none near the top. Project Resources passes
+both rules: it has 46 employers, and its biggest one posts 49.5% of its postings, just under the cap.
+(Security Governance and Project Governance tie AI Agents at $9,000, so which of them is 5th is arbitrary.)
+
+Neither rule stops one bulk poster from setting a skill's median. Rules on which skills get a row cannot fix
+this, so the median itself was changed: `skill_salary` is now employer-weighted (each employer's median first,
+then the median across employers), and both weeks were rebuilt. Median monthly midpoint, old (per posting)
+against new (per employer):
+
+| # | Week ending 27 Oct, old | Week ending 27 Oct, new | Week ending 3 Nov, old | Week ending 3 Nov, new |
+|---|---|---|---|---|
+| 1 | Solution Architecture $10,000 | Family Medicine $10,450 | Project Resources $14,000 | Family Medicine $10,950 |
+| 2 | Data Governance $8,750 | Solution Architecture $10,062 | Enterprise Architecture $10,500 | Enterprise Architecture $10,500 |
+| 3 | Project Governance $8,750 | Influencing Key Stakeholders $9,500 | Solution Architecture $10,000 | Solution Architecture $10,000 |
+| 4 | Microservice $8,750 | Google Cloud $9,125 | Direct experience $9,250 | Strategic Leadership $9,750 |
+| 5 | Influencing Key Stakeholders $8,625 | Governance $9,000 | AI Agents $9,000 | AI Agents $9,500 |
+| 6 | Governance $8,500 | Lead implementation $9,000 | Project Governance $9,000 | Influencing Key Stakeholders $9,500 |
+| 7 | AI Agents $8,500 | Project Governance $8,975 | Security Governance $9,000 | Data Governance $9,000 |
+| 8 | Data Engineering $8,500 | Data Governance $8,750 | Influencing Key Stakeholders $8,838 | Governance $9,000 |
+| 9 | Agile Delivery $8,500 | Agile Delivery $8,750 | Cross-Functional Team Leadership $8,750 | Agile Methodologies $9,000 |
+| 10 | Cross Functional Project Management $8,425 | Microservices Design $8,750 | Data Governance $8,750 | Project Governance $9,000 |
+
+Project Resources falls from $14,000 to $6,000 (46 employers) and Direct experience from $9,250 to $5,250
+(59 employers): both had been lifted by one bulk poster. Family Medicine moves the other way, from $5,750 to
+the top in both weeks (46 and 49 employers): one recruiter posted 45 and 54 of its salaried postings at a
+median $5,750, which set the old median; the other employers, mostly with a posting or two each, pay more. The market median the ratios compare with barely moves (about $4,000). Ties are
+ordered by postings.
+
 ## 6. Limitations
 
-- Two weeks of data by the report freeze: week-on-week change exists for one pair of weeks, so a trend is two
-  points.
+- Three weeks of data by the report freeze (ending 27 Oct, 3 Nov and 10 Nov; the first holds only the
+  24 to 27 Oct snapshots): week-on-week change exists for two pairs of weeks, so a trend is at most three points.
 - Views, applications and repost counts carry over a repost, and reposts before 24 Oct cannot be dated. The
   shortage rule uses totals, which is the conservative side.
 - Applications per day since posting falls with posting age (most applications come early), so older

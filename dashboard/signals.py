@@ -351,10 +351,15 @@ def demand_verdict(row) -> dict:
 def pay_verdict(row, t: dict) -> dict:
     if missing(row.get("salary_mid_median")):
         return {"value": "n/a", "delta": None,
-                "caption": f"Fewer than {t['salary_min_postings']} open postings with a usable salary, or one "
-                           f"employer posts more than {t['max_top_company_share']:.0%} of them."}
+                "caption": f"Fewer than {t['salary_min_postings']} open postings with a usable salary or fewer "
+                           f"than {t['min_companies']} employers, or one employer posts more than "
+                           f"{t['max_top_company_share']:.0%} of them."}
+    # employer-weighted: each employer's median first, then the median across employers
+    employers = row.get("salary_companies")
+    who = f"its {int(employers):,} employers" if not missing(employers) and employers else "its employers"
     return {"value": money(row["salary_mid_median"]), "delta": None,
-            "caption": f"median a month, {times(row['salary_vs_overall'])} the median posting. The middle half pay "
+            "caption": f"median a month across {who} (each counted once), {times(row['salary_vs_overall'])} "
+                       f"the market's. The middle half of employers pay "
                        f"{money(row['salary_mid_p25'])} to {money(row['salary_mid_p75'])}."}
 
 
@@ -439,6 +444,6 @@ def lookup_summary(row, t: dict) -> str:
     if not missing(apps) and not missing(overall) and overall:
         text += f" Its postings get {'fewer' if apps < overall else 'more'} applicants than average"
         if not missing(row.get("salary_vs_overall")):
-            text += f" and pay {times(row['salary_vs_overall'])} the median posting"
+            text += f" and pay {times(row['salary_vs_overall'])} the market's median"
         text += "."
     return text

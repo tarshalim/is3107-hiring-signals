@@ -72,7 +72,7 @@ THRESHOLDS = {
                                      # the top medians then came from 32 to 34 postings, e.g. "Protection", "IPO")
     "demand_min_postings": 30,       # postings with the skill across the whole demand window
     "demand_weeks": 6,               # posting weeks kept in skill_demand, counting back from the snapshot's week
-    "min_companies": 10,             # employers behind a barrier skill, or behind a skill's shortage postings
+    "min_companies": 10,             # employers behind a barrier skill, a skill's shortage postings or its pay
                                      # (on 25 Oct "Aircraft Systems" had 40 shortage postings from ONE employer;
                                      # on 3 Nov, with 5, Metal Fabrication's 57 shortage postings came from 5 firms)
     "max_top_company_share": 0.5,    # a barrier or shortage skill is not flagged when its single biggest employer
@@ -625,10 +625,13 @@ WHERE p.skill_total >= %(demand_min_postings)s
 
 # ---------------------------------------------------------------------------------------------
 # Signal 5b: salary per skill (open postings, monthly, as advertised)
+# Employer-weighted (8 Nov): each employer's median first, then the median (and P25/P75) across employers, so
+# one employer counts once however many ads it posts. Before, 54 of Project Resources' 109 postings were one
+# recruiter's $10-18k site manager ads, which made it the top-paid skill at $14,000.
 # ---------------------------------------------------------------------------------------------
 SKILL_SALARY_SQL = f"""
 INSERT INTO metrics.skill_salary (week_end_date, snapshot_date, skill_ref, skill_name, is_mapped, postings,
-    vacancies, salary_min_median, salary_max_median, salary_mid_p25, salary_mid_median, salary_mid_p75,
+    companies, vacancies, salary_min_median, salary_max_median, salary_mid_p25, salary_mid_median, salary_mid_p75,
     mid_vs_overall, top_company_share)
 WITH {_POOL_SKILL}, {_SKILL_NAMES},
 paid AS (
@@ -636,40 +639,40 @@ paid AS (
     FROM metrics.posting_week
     WHERE week_end_date = %(e)s AND salary_usable
 ),
-top_company AS (
-    -- per skill, the salaried postings of its single biggest employer (8 Nov check: 54 of Project Resources'
-    -- 109 postings were one recruiter's $10-18k site manager ads, which made it the top-paid skill)
-    SELECT skill_ref, max(n) AS top_n
-    FROM (SELECT ps.skill_ref, p.company_name, count(*) AS n
-          FROM pool_skill ps
-          JOIN paid p ON p.job_uuid = ps.job_uuid
-          GROUP BY ps.skill_ref, p.company_name) per_company
-    GROUP BY skill_ref
-),
-overall AS (
-    SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY salary_mid) AS mid FROM paid
-),
-per_skill AS (
-    SELECT ps.skill_ref, count(*) AS postings, sum(p.vacancies) AS vacancies,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY p.salary_min)                 AS min_med,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY p.salary_max)                 AS max_med,
-           percentile_cont(ARRAY[0.25, 0.5, 0.75]) WITHIN GROUP (ORDER BY p.salary_mid) AS mid_q
+per_employer AS (   -- one row per skill and employer: its salaried postings and its own medians
+    SELECT ps.skill_ref, p.company_name, count(*) AS n, sum(p.vacancies) AS vacancies,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY p.salary_min) AS min_med,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY p.salary_max) AS max_med,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY p.salary_mid) AS mid_med
     FROM pool_skill ps
     JOIN paid p ON p.job_uuid = ps.job_uuid
-    GROUP BY ps.skill_ref
-    HAVING count(*) >= %(salary_min_postings)s
+    GROUP BY ps.skill_ref, p.company_name
+),
+overall AS (   -- the market, weighted the same way: each employer's median midpoint, then the median of those
+    SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY mid_med) AS mid
+    FROM (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY salary_mid) AS mid_med
+          FROM paid GROUP BY company_name) e
+),
+per_skill AS (
+    SELECT skill_ref, sum(n) AS postings, count(*) AS companies, max(n) AS top_n, sum(vacancies) AS vacancies,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY min_med)                 AS min_med,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY max_med)                 AS max_med,
+           percentile_cont(ARRAY[0.25, 0.5, 0.75]) WITHIN GROUP (ORDER BY mid_med) AS mid_q
+    FROM per_employer
+    GROUP BY skill_ref
+    -- as for barrier and shortage: a skill's pay needs salaried postings from min_companies employers
+    HAVING sum(n) >= %(salary_min_postings)s AND count(*) >= %(min_companies)s
 )
-SELECT %(e)s, %(s)s, p.skill_ref, n.skill_name, n.is_mapped, p.postings, p.vacancies,
+SELECT %(e)s, %(s)s, p.skill_ref, n.skill_name, n.is_mapped, p.postings, p.companies, p.vacancies,
        round(p.min_med::numeric, 2), round(p.max_med::numeric, 2),
        round(p.mid_q[1]::numeric, 2), round(p.mid_q[2]::numeric, 2), round(p.mid_q[3]::numeric, 2),
        round(p.mid_q[2]::numeric / NULLIF(o.mid::numeric, 0), 3),
-       round(t.top_n::numeric / p.postings, 4)
+       round(p.top_n::numeric / p.postings, 4)
 FROM per_skill p
-JOIN top_company t ON t.skill_ref = p.skill_ref
 CROSS JOIN overall o
 JOIN skill_names n ON n.skill_ref = p.skill_ref
 -- as for shortage: a skill's pay is left out when one employer posts more than max_top_company_share of it
-WHERE t.top_n::numeric / p.postings <= %(max_top_company_share)s
+WHERE p.top_n::numeric / p.postings <= %(max_top_company_share)s
 """
 
 # ---------------------------------------------------------------------------------------------

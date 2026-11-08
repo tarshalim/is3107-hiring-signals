@@ -69,9 +69,9 @@ def _seed(cur):
 
     cur.execute("""
         INSERT INTO metrics.skill_salary (week_end_date, snapshot_date, skill_ref, skill_name, is_mapped, postings,
-            salary_mid_p25, salary_mid_median, salary_mid_p75, mid_vs_overall)
-        VALUES (%(w)s, %(w)s, 'sm', 'Self Management', TRUE, 20000, 3000, 4000, 5500, 0.99),
-               (%(w)s, %(w)s, 'qs', 'Quantity Surveying', FALSE, 1332, 3900, 4500, 5750, 1.111)
+            companies, salary_mid_p25, salary_mid_median, salary_mid_p75, mid_vs_overall)
+        VALUES (%(w)s, %(w)s, 'sm', 'Self Management', TRUE, 20000, 5200, 3000, 4000, 5500, 0.99),
+               (%(w)s, %(w)s, 'qs', 'Quantity Surveying', FALSE, 1332, 410, 3900, 4500, 5750, 1.111)
     """, {"w": W3})
 
     rows = [(W3, "overall", "all", "All postings", 88610, 0.35), (W3, "skill", "qs", "Quantity Surveying", 1333, 0.11),
@@ -179,6 +179,7 @@ def test_skill_signals_line_up_every_signal(conn):
     assert float(qs["apps_per_posting_day_24h_prev_week"]) == pytest.approx(0.06)
     assert qs["is_technical"] is True and rows["sm"]["is_technical"] is None      # sm: no shortage or barrier row
     assert qs["shortage_base_postings"] == 1333 and rows["sm"]["shortage_base_postings"] is None
+    assert qs["salary_companies"] == 410 and rows["gl"]["salary_companies"] is None   # gl: no salary row
 
 
 def test_last_week_means_the_last_finished_week(conn):

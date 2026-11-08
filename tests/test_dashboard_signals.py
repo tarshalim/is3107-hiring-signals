@@ -39,7 +39,7 @@ def _row(**values):
             "is_barrier_prev_week": False, "apps_per_posting_day_24h": 0.1145,
             "overall_apps_per_posting_day_24h": 0.3451, "apps_per_posting_day_24h_prev_week": 0.0603,
             "salary_mid_median": 4500.0, "salary_mid_p25": 3900.0, "salary_mid_p75": 5750.0,
-            "salary_vs_overall": 1.111, "demand_week": date(2026, 10, 26), "demand_share": 0.01187,
+            "salary_vs_overall": 1.111, "salary_companies": 410, "demand_week": date(2026, 10, 26), "demand_share": 0.01187,
             "demand_new_postings": 274, "demand_share_week_before": None}
     return pd.Series({**base, **values})
 
@@ -302,8 +302,11 @@ def test_demand_and_pay_verdicts():
     assert logic.demand_verdict(_row(demand_week=None))["value"] == "n/a"
     p = logic.pay_verdict(_row(), T)
     assert p["value"] == "$4,500" and "$3,900 to $5,750" in p["caption"] and "1.1x" in p["caption"]
+    assert "across its 410 employers (each counted once)" in p["caption"]       # employer-weighted since 8 Nov
+    assert "across its employers" in logic.pay_verdict(_row(salary_companies=None), T)["caption"]
     none = logic.pay_verdict(_row(salary_mid_median=None), T)
     assert none["value"] == "n/a" and "more than 50% of them" in none["caption"]
+    assert "fewer than 10 employers" in none["caption"]
 
 
 def test_lookup_summary_names_the_causes():

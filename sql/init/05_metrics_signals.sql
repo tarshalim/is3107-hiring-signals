@@ -239,6 +239,8 @@ CREATE TABLE IF NOT EXISTS metrics.skill_demand (
 );
 
 -- Signal 5b, skill salary: what do open postings asking for each skill pay (monthly, as advertised)?
+-- Employer-weighted (8 Nov): every median and percentile is taken over the employers' own medians, so one
+-- employer counts once however many postings it has.
 CREATE TABLE IF NOT EXISTS metrics.skill_salary (
     week_end_date      DATE    NOT NULL,
     snapshot_date      DATE    NOT NULL,
@@ -246,13 +248,15 @@ CREATE TABLE IF NOT EXISTS metrics.skill_salary (
     skill_name         TEXT    NOT NULL,
     is_mapped          BOOLEAN NOT NULL,
     postings           INTEGER NOT NULL,            -- open postings with the skill and a usable salary (posting_week.salary_usable)
+    companies          INTEGER NOT NULL,            -- distinct employers among them (at least thresholds.min_companies)
     vacancies          INTEGER,
-    salary_min_median  NUMERIC(12,2),               -- median of the advertised minimum
-    salary_max_median  NUMERIC(12,2),               -- median of the advertised maximum
-    salary_mid_p25     NUMERIC(12,2),
+    salary_min_median  NUMERIC(12,2),               -- median across employers of each one's median advertised minimum
+    salary_max_median  NUMERIC(12,2),               -- the same for the advertised maximum
+    salary_mid_p25     NUMERIC(12,2),               -- P25, median and P75 across employers of each one's median midpoint
     salary_mid_median  NUMERIC(12,2),
     salary_mid_p75     NUMERIC(12,2),
-    mid_vs_overall     NUMERIC(8,3),                -- salary_mid_median / median over all open postings
+    mid_vs_overall     NUMERIC(8,3),                -- salary_mid_median / the same employer-weighted median over all
+                                                    -- open postings with a usable salary
     top_company_share  NUMERIC(6,4),                -- share of the postings from the single biggest employer
                                                     -- (a skill above thresholds.max_top_company_share is left out)
     PRIMARY KEY (week_end_date, skill_ref)
@@ -330,3 +334,6 @@ ALTER TABLE metrics.barrier_skill  ALTER COLUMN is_technical DROP DEFAULT;
 ALTER TABLE metrics.shortage_skill ALTER COLUMN is_technical DROP DEFAULT;
 -- skill salary: one bulk employer cannot make a skill's pay either (thresholds.max_top_company_share, 8 Nov)
 ALTER TABLE metrics.skill_salary ADD COLUMN IF NOT EXISTS top_company_share NUMERIC(6,4);
+-- skill salary employer-weighted, with its employer count (8 Nov). Old weeks read 0 until they are rerun
+ALTER TABLE metrics.skill_salary ADD COLUMN IF NOT EXISTS companies INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE metrics.skill_salary ALTER COLUMN companies DROP DEFAULT;
