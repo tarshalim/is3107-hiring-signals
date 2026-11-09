@@ -19,6 +19,23 @@ from dashboard.tabs import (  # noqa: E402
 
 st.set_page_config(page_title="SG hiring signals", page_icon=":bar_chart:", layout="wide")
 
+# Long occupation/skill labels were truncated in dropdowns: wrap them and widen the popover and sidebar.
+st.markdown(
+    """
+    <style>
+    section[data-testid="stSidebar"] { min-width: 22rem; }
+    div[data-baseweb="select"] > div { height: auto; min-height: 2.5rem; }
+    div[data-baseweb="select"] div[value],
+    div[data-baseweb="select"] span { white-space: normal; overflow: visible; text-overflow: clip; }
+    div[data-baseweb="tag"] { max-width: 100%; height: auto; }
+    div[data-baseweb="tag"] span { white-space: normal; max-width: none; }
+    div[data-baseweb="popover"] { min-width: min(36rem, 90vw); }
+    ul[role="listbox"] li, ul[role="listbox"] li div { white-space: normal; overflow: visible; text-overflow: clip; height: auto; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 WEEKLY_TABS = ("Hiring signals", "Skill lookup", "Market check")
 
 
