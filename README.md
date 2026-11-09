@@ -9,7 +9,7 @@ unrealistic requirements.
 
 | Folder | What goes there |
 |---|---|
-| `dags/` | Airflow DAGs (daily ingest, 30-minute live poll, daily transform, weekly metrics) |
+| `dags/` | Airflow DAGs (daily ingest, 30-minute live poll, daily transform, weekly metrics, weekly lake export); `dags/common/` holds the shared failure and retry alerts |
 | `ingestion/` | API clients (MyCareersFuture, MOM via data.gov.sg) |
 | `transform/` | Cleaning, deduplication, skill standardisation |
 | `metrics/` | Weekly hiring signals built from the clean layer |
@@ -18,6 +18,9 @@ unrealistic requirements.
 | `dashboard/` | Streamlit dashboard (`app.py`, one module per tab in `tabs/`) |
 | `data/reference/` | Small static files (e.g. SkillsFuture framework). Everything else in `data/` is git-ignored |
 | `tests/` | `pytest` tests |
+| `docker/` | Our own Airflow image (`docker/airflow/Dockerfile`, pinned extras) |
+| `spark/` | PySpark job on the Parquet lake and the lake benchmark (compose profile `spark`) |
+| `ops/` | Hand-run operations scripts: scale, cost and restore report |
 
 ## Run it locally
 
@@ -44,7 +47,7 @@ docker compose exec warehouse psql -U jobs -d jobs -c \
 
 ## Daily ingestion
 
-`fetch_snapshot → check_snapshot → load_raw`, every day at 06:00 Singapore time.
+`fetch_snapshot → check_snapshot → load_raw`, every day at 10:00 Singapore time (`schedule="0 10 * * *"`).
 
 - **fetch_snapshot** pages through the MyCareersFuture API (100 postings per page, retries with
   backoff on 429/5xx) and saves the raw postings to `data/raw/mcf/<date>.jsonl.gz`.
@@ -110,8 +113,16 @@ pip install -r dashboard/requirements.txt
 streamlit run dashboard/app.py
 ```
 
-Seven tabs, all filterable by window (7/14/30 days), occupation group, SSOC major group, job category, skill
-type and emerging skills:
+Three weekly tabs come first and answer the business question from the `metrics` tables of the week picked in
+the sidebar (`docs/dashboard-signals.md`; apply `sql/init/10_dashboard_signals.sql` once on an existing warehouse):
+
+- **Hiring signals**: the headline answers, then shortage skills, barrier skills, unrealistic asks and
+  applications per posting by occupation, each marked as flagged last week too or new.
+- **Skill lookup**: every weekly signal for one skill (demand, pay, shortage, barrier, competition).
+- **Market check**: MCF share of postings against MOM share of vacancies, and what the gap means for the signals.
+
+Six daily tabs follow, all filterable by window (7/14/30 days), occupation group, SSOC major group, job
+category, skill type and emerging skills:
 
 - **Trending skills**: top 20 skills by share of postings, last-7-days vs previous-7-days change in share, daily trend.
 - **Salary**: P25 to P75 monthly salary bands for skills, skill pairs and occupations (disclosed salaries only),
@@ -122,7 +133,6 @@ type and emerging skills:
 - **Salary estimator**: estimates the monthly salary midpoint for an occupation, position level, category,
   experience and skill set, with a likely range, what drives the estimate and the model's held-out error
   against the proposal's 15% target.
-- **Hiring difficulty**: applications per posting, repost rate and days open, combined into a relative index.
 - **Career moves**: occupations with similar skill demand, the skill gap between two occupations, and the
   occupations your own skills cover best.
 - **Pipeline health**: daily-run reliability against the 95% target, ingestion coverage, transform timings,
@@ -151,7 +161,7 @@ branches that read the same week and the same snapshot:
 
 ```
 refresh_mom_stats -> compare_mcf_with_mom
-pick_snapshot -> build_posting_week -> 6 signal tables in parallel -> check_and_log
+pick_snapshot -> build_posting_week -> 7 signal tables in parallel -> check_and_log
 ```
 
 - **refresh_mom_stats** downloads MOM's "Number of Job Vacancy by Occupation - Quarterly" from data.gov.sg
@@ -161,9 +171,10 @@ pick_snapshot -> build_posting_week -> 6 signal tables in parallel -> check_and_
   the latest snapshot of the run's week vs MOM's share of vacancies in the latest quarter, MOM's 1-year and
   5-year change, and a `disagrees` flag when the shares differ by 10 percentage points or more.
   `metrics.mom_vacancy_trend` is the long MOM series for the trend chart.
-- **pick_snapshot** → **build_posting_week** → six signal tables → **check_and_log** (`metrics/`) fill the tables of
+- **pick_snapshot** → **build_posting_week** → seven signal tables → **check_and_log** (`metrics/`) fill the tables of
   `sql/init/05_metrics_signals.sql` from the open postings of the week end (`metrics.posting_week`): barrier
-  skills, skill shortages, unrealistic requirements, competitiveness, skill demand and skill salary.
+  skills, skill shortages, unrealistic requirements, competitiveness, skill demand, skill salary and group
+  signals (the summary grid's shares per job category and SSOC major group).
   `metrics.run_log` records the week (`week_end_date`, the interval's last day), the snapshot used and the checks.
   `metrics.mcf_vs_mom_share` above is their MOM validation. Same steps without Airflow:
   `python -m metrics.run --week-ending 2026-11-03`. Table meanings, thresholds, validation: `docs/weekly-metrics.md`.
@@ -196,7 +207,7 @@ Without Airflow: `python -m transform.mom_vacancies` (or `--skip-download` to re
 
 ## Extra data (`ext` schema)
 
-Ten daily snapshots are a short window, so `sql/init/04_ext_schema.sql` adds three sources that widen it
+Sixteen daily snapshots (24 Oct to 8 Nov 2026) are a short window, so `sql/init/04_ext_schema.sql` adds three sources that widen it
 (details, licences, row counts and findings: `docs/extra-data.md`):
 
 - **2019 MyCareersFuture crawl** (Kaggle, 20,296 postings) for "2019 vs now" on skills and pay
@@ -220,6 +231,23 @@ docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_D
 # Windows PowerShell:
 Get-Content sql/init/04_ext_schema.sql | docker compose exec -T warehouse sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 ```
+
+## Monitoring, images, lake and scale
+
+- **Alerts**: every DAG writes each task failure, retry and timed-out run to `ops.alert_log` (optional Telegram
+  message), shown on the Pipeline health tab. **Schema drift**: the ingest DAG compares each day's JSON field paths
+  with the last stored day and records `raw_schema_drift` in `clean.dq_results`. `docs/alerts-and-monitoring.md`
+- **Our own pinned images**: `is3107-airflow:2.10.5-r1` installs openpyxl and rapidfuzz at build time, not at every
+  container start; the dashboard image and all requirements are pinned. `docs/docker-images.md`
+- **Parquet lake and Spark**: `weekly_lake_export` writes the clean fact rows to `data/lake/` (one Parquet file per
+  day); `docker compose --profile spark run --rm spark` runs a PySpark job on it; `spark/benchmark.py` measures
+  sizes, scan times and Spark against Postgres. `docs/lake-and-spark.md`
+- **Scale, cost and restore**: `python -m ops.scale_report` (one-year projection, timed restore of a day from its
+  gz file). `docs/scale-and-cost.md`
+
+On an existing warehouse apply `sql/init/09_ops_alerts.sql`, `11_ops_schema_fields.sql` and `12_ops_lake_exports.sql`
+once (safe to run twice), then `docker compose build` and `docker compose up -d`. Step by step for the collector
+laptop: `docs/deploy-eng-improvements.md`.
 
 ## Tests
 

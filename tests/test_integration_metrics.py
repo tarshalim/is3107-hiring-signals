@@ -76,8 +76,11 @@ def conn():
 
 def _fixture_days(make_payload):
     def p(letter, views, apps, extra=None):
+        # a hospital (SSIC 86101), not the base payload's employment agency: the shortage signal leaves agencies
+        # out (tested at the end by calling SSIC 86 an agency prefix)
         return make_payload(uuid=letter * 32, **{"metadata.totalNumberOfView": views,
-                                                 "metadata.totalNumberJobApplication": apps, **(extra or {})})
+                                                 "metadata.totalNumberJobApplication": apps,
+                                                 "postedCompany.ssicCode2020": "86101", **(extra or {})})
 
     teamwork = {"skill": "Teamwork", "uuid": "bbbb0000bbbb0000bbbb0000bbbb0000", "confidence": None, "isKeySkill": False}
     forklift = [{"skill": "Forklift Operation", "uuid": "f" * 32, "confidence": None, "isKeySkill": True}]
@@ -201,6 +204,18 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
     assert unreal["entry_level_2plus_years"][:3] == (1, 1, Decimal("1.0000"))
     assert unreal["junior_2plus_years"][:3] == (1, 0, Decimal("0.0000"))      # e: Junior Executive asking 1 year
 
+    # summary by group, overall: 6 postings, none by an agency; c the one shortage posting, g the one barrier
+    # posting; b the one entry-level posting, asking 3 years. Usable salaries: 5 at the base 3,500 to 4,200
+    assert _one(conn, """SELECT postings, agency_share, direct_postings, shortage_postings, shortage_share,
+                                barrier_postings, entry_postings, entry_2plus_postings, entry_2plus_share,
+                                salary_mid_median
+                         FROM metrics.group_signals WHERE week_end_date = %s AND group_type = 'overall'""", D3) \
+        == (6, Decimal("0.0000"), 6, 1, Decimal("0.1667"), 1, 1, 1, Decimal("1.0000"), Decimal("3850.00"))
+    # by SSOC major group: c (83441) is the only posting of group 8, and the shortage one
+    assert _all(conn, """SELECT group_key, postings, shortage_postings FROM metrics.group_signals
+                         WHERE week_end_date = %s AND group_type = 'ssoc_major_group' ORDER BY 1""", D3) \
+        == [("2", 5, 0), ("8", 1, 1)]
+
     # skill demand by posting week: a to f were first posted on 24 Oct (week of 19 Oct), g on 26 Oct
     demand = {(r[0], r[1]): r[2:] for r in _all(conn, """
         SELECT skill_name, posting_week, new_postings, week_total_postings, share_of_week, week_fully_observed
@@ -214,8 +229,9 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
     assert _one(conn, "SELECT min(salary_mid_median), max(salary_mid_median) FROM metrics.skill_salary WHERE week_end_date = %s",
                 D3) == (Decimal("3850.00"), Decimal("3850.00"))
     # g's $12 to $15 "monthly" salary is left out: Collaboration has 5 open postings but 4 usable salaries
-    assert _one(conn, "SELECT postings FROM metrics.skill_salary WHERE week_end_date = %s AND skill_name = 'Collaboration'",
-                D3) == (4,)
+    # (every fixture posting is from one employer, so the employer-weighted median is that employer's median)
+    assert _one(conn, "SELECT postings, companies FROM metrics.skill_salary WHERE week_end_date = %s "
+                      "AND skill_name = 'Collaboration'", D3) == (4, 1)
     assert _one(conn, "SELECT salary_usable FROM metrics.posting_week WHERE week_end_date = %s AND job_uuid = %s",
                 D3, "g" * 32) == (False,)
 
@@ -292,6 +308,7 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
     assert _one(conn, """SELECT top_company_share, lift FROM metrics.barrier_skill
                          WHERE week_end_date = %s AND skill_name = 'Pack goods'""", D3) == (Decimal("1.0000"), Decimal("5.000"))
     assert _all(conn, "SELECT skill_name FROM metrics.shortage_skill WHERE week_end_date = %s", D3) == []
+    assert _all(conn, "SELECT skill_name FROM metrics.skill_salary WHERE week_end_date = %s", D3) == []   # pay too
     assert _one(conn, "SELECT thresholds->>'max_top_company_share' FROM metrics.run_log WHERE week_end_date = %s",
                 D3) == ("0.5",)
 
@@ -303,3 +320,56 @@ def test_weekly_metrics_end_to_end(conn, make_payload):
                          GROUP BY 1 ORDER BY 1""", D3) == [("22", 5), ("83", 1)]
     assert _all(conn, """SELECT barrier_share, expected_share, lift FROM metrics.barrier_skill
                          WHERE week_end_date = %s AND is_barrier""", D3) == [(Decimal("1.0000"), Decimal("0.2000"), Decimal("5.000"))]
+
+    # ---- agencies: with SSIC 86 counted as an agency prefix, every fixture posting is an agency's. They stay
+    # in posting_week, flagged, but the shortage signal has no direct postings left ----------------------------
+    run_week(conn, D3 - timedelta(days=7), D3, run_id="test-w3-agency",
+             thresholds={**SMALL, "agency_ssic_prefix": "86"})
+    assert _one(conn, """SELECT count(*), count(*) FILTER (WHERE posted_by_agency), count(*) FILTER (WHERE is_shortage)
+                         FROM metrics.posting_week WHERE week_end_date = %s""", D3) == (6, 6, 1)
+    assert _all(conn, "SELECT skill_name FROM metrics.shortage_skill WHERE week_end_date = %s", D3) == []
+    assert _one(conn, """SELECT agency_share, direct_postings, shortage_postings, shortage_share FROM metrics.group_signals
+                         WHERE week_end_date = %s AND group_type = 'overall'""", D3) == (Decimal("1.0000"), 0, 0, None)
+    # the barrier signal does not look at the poster
+    assert _all(conn, "SELECT skill_name FROM metrics.barrier_skill WHERE week_end_date = %s AND is_barrier", D3) \
+        == [("Pack goods",)]
+    # reposted with many applications: d is the only one, and it is a direct employer's in the main run; here
+    # every posting is an agency's, so the flag's base (direct employers) is empty
+    assert _one(conn, """SELECT base_postings, flagged_postings FROM metrics.unrealistic_requirements
+                         WHERE week_end_date = %s AND flag = 'reposted_many_apps' AND group_type = 'overall'""",
+                D3) is None
+
+    # ---- a generic tag (here Forklift Operation, for the test) is left out of every skill-level table ------------
+    run_week(conn, D3 - timedelta(days=7), D3, run_id="test-w3-generic",
+             thresholds={**SMALL, "generic_skill_tags": ["forklift operation"]})
+    for table in ("barrier_skill", "shortage_skill", "skill_demand"):
+        assert _all(conn, f"SELECT skill_name FROM metrics.{table} WHERE week_end_date = %s "
+                          "AND skill_name = 'Forklift Operation'", D3) == [], table
+    assert _all(conn, """SELECT group_label FROM metrics.competitiveness WHERE week_end_date = %s
+                         AND group_type = 'skill' AND group_label = 'Forklift Operation'""", D3) == []
+    # c keeps its shortage flag: only the skill tables leave the tag out
+    assert _one(conn, "SELECT count(*) FILTER (WHERE is_shortage) FROM metrics.posting_week WHERE week_end_date = %s",
+                D3) == (1,)
+
+    # ---- technical skills: Forklift Operation is an unmapped tag, so technical until it is on the soft-tag list.
+    # It stays in the table either way: only the dashboard's default view hides it ------------------------------
+    run_week(conn, D3 - timedelta(days=7), D3, run_id="test-w3-technical", thresholds=SMALL)
+    assert _one(conn, """SELECT skill_type, is_technical FROM metrics.shortage_skill
+                         WHERE week_end_date = %s AND skill_name = 'Forklift Operation'""", D3) == (None, True)
+    run_week(conn, D3 - timedelta(days=7), D3, run_id="test-w3-soft",
+             thresholds={**SMALL, "soft_skill_tags": ["forklift operation"]})
+    assert _one(conn, """SELECT is_technical FROM metrics.shortage_skill
+                         WHERE week_end_date = %s AND skill_name = 'Forklift Operation'""", D3) == (False,)
+    assert _one(conn, """SELECT is_technical FROM metrics.barrier_skill
+                         WHERE week_end_date = %s AND skill_name = 'Forklift Operation'""", D3) == (False,)
+
+    # ---- minimum lift: Forklift Operation's shortage lift is 6 (above), so a minimum of 7 drops it -----------------
+    run_week(conn, D3 - timedelta(days=7), D3, run_id="test-w3-min-lift", thresholds={**SMALL, "shortage_min_lift": 7})
+    assert _all(conn, "SELECT skill_name FROM metrics.shortage_skill WHERE week_end_date = %s", D3) == []
+
+    # ---- a barrier skill must also get fewer applications per view than the whole market: Pack goods (g, 7 / 120 =
+    # 0.0583) against 340 / 2,080 = 0.1635 overall is 0.357 of it; a cap of 0.3 drops it ----------------------
+    run_week(conn, D3 - timedelta(days=7), D3, run_id="test-w3-market-rate",
+             thresholds={**SMALL, "barrier_max_rate_vs_overall": 0.3})
+    assert _one(conn, """SELECT rate_vs_overall, is_barrier FROM metrics.barrier_skill
+                         WHERE week_end_date = %s AND skill_name = 'Pack goods'""", D3) == (Decimal("0.357"), False)

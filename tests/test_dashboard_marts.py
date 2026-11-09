@@ -5,6 +5,7 @@
 Builds a scratch database `is3107_marts_test`, applies sql/init/01 and 02, inserts a small hand-made star
 (3 postings over 14 days, one of them starting on day 8) and checks the numbers the dashboard would show.
 """
+import json
 import os
 from datetime import date, timedelta
 from pathlib import Path
@@ -104,7 +105,9 @@ def conn():
     admin.close()
     c = psycopg2.connect(_test_dsn())
     with c, c.cursor() as cur:
-        for f in ("01_raw_schema.sql", "02_clean_schema.sql", "08_salary_model.sql"):
+        # 03 and 05 for metrics.run_log: the daily tabs read the latest weekly run's tag lists from it
+        for f in ("01_raw_schema.sql", "02_clean_schema.sql", "03_mom_vacancies.sql", "05_metrics_signals.sql",
+                  "08_salary_model.sql"):
             cur.execute((REPO / "sql" / "init" / f).read_text(encoding="utf-8"))
         _seed(cur)
     yield c
@@ -270,8 +273,6 @@ def test_every_dashboard_query_runs(queries):
     assert len(queries.skill_salaries(f, 1)) >= 2
     assert len(queries.skill_pair_salaries(f, 1)) == 1
     assert set(queries.occupation_salaries(f, 1)["ssoc_title"]) == {"occupation 25122", "occupation 41101"}
-    assert len(queries.occupation_difficulty(f, 1)) == 2
-    assert not queries.skill_difficulty(f, 1).empty
     occupations, skills = queries.occupation_skill_profiles()
     assert list(occupations.columns) == ["ssoc_code", "ssoc_title", "mom_group", "postings"]
     assert "skill_postings" in skills.columns
@@ -296,3 +297,51 @@ def test_every_dashboard_query_runs(queries):
     queries.ingest_runs()
     queries.load_steps()
     queries.dq_results()
+
+
+def test_trending_uses_the_latest_weekly_runs_generic_and_soft_tag_lists(conn, queries):
+    """8 Nov check: Trending was topped by sector tags the weekly signals leave out. Here Excel (an unmapped tag)
+    is first a soft tag (hidden only from the technical view), then a generic one (always left out)."""
+    from dashboard.filters import Filters
+
+    def labels(technical):
+        queries.trending_skills.clear()
+        return sorted(queries.trending_skills(Filters(), min_mentions=1, technical_only=technical)["skill_label"])
+
+    everything = ["Excel", "Python Programming", "SQL Database"]
+    assert labels(False) == labels(True) == everything                 # no weekly run yet: nothing left out
+
+    def run(week, status, thresholds):
+        with conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO metrics.run_log (week_end_date, week_start_date, snapshot_date, snapshot_is_week_end,
+                    snapshots_in_week, pool_from_date, pool_to_date, thresholds, status)
+                VALUES (%(w)s, %(w)s - 6, %(w)s, TRUE, ARRAY[%(w)s], %(w)s, %(w)s, %(t)s, %(s)s)
+            """, {"w": week, "t": json.dumps(thresholds), "s": status})
+    try:
+        run(LAST, "ok", {"generic_skill_tags": [], "soft_skill_tags": ["excel"]})
+        assert labels(False) == everything and labels(True) == ["Python Programming", "SQL Database"]
+        # a later run that failed its checks is not used; a later finished one is
+        run(LAST + timedelta(days=7), "failed_checks", {"generic_skill_tags": ["python"], "soft_skill_tags": []})
+        assert labels(True) == ["Python Programming", "SQL Database"]
+        run(LAST + timedelta(days=14), "ok", {"generic_skill_tags": ["Excel"], "soft_skill_tags": []})
+        assert labels(False) == ["Python Programming", "SQL Database"]
+    finally:
+        with conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM metrics.run_log")
+        queries.trending_skills.clear()
+
+
+def test_an_all_digit_industry_is_unknown_industry(conn, queries):
+    """MCF gives '00000' as the SSIC description of a posting without one (646 open postings on 7 Nov)."""
+    with conn, conn.cursor() as cur:
+        cur.execute("UPDATE clean.dim_job SET company_ssic_desc = '00000' WHERE job_uuid = 'j2'")
+    try:
+        rebuild_marts(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT industry FROM mart.industry_latest ORDER BY 1")
+            assert cur.fetchall() == [("Software",), ("Unknown industry",)]
+    finally:
+        with conn, conn.cursor() as cur:
+            cur.execute("UPDATE clean.dim_job SET company_ssic_desc = 'Retail' WHERE job_uuid = 'j2'")
+        rebuild_marts(conn)

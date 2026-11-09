@@ -7,7 +7,8 @@ from dashboard.filters import Filters
 
 NOTE = ("Monthly salary in SGD from postings that disclose a range (midpoint of min and max), for postings "
         "open on the latest snapshot day. The bar spans the 25th to 75th percentile; the marker is the median. "
-        "Skills and pairs ignore the occupation and industry filters.")
+        "Skills and pairs ignore the occupation and industry filters. These are medians per posting (daily); the "
+        "weekly pay in Skill lookup is an employer-weighted median (weekly), so the two can rank skills differently.")
 
 
 def band_chart(frame, label_col: str, title: str, keep_order: bool = False):
@@ -41,7 +42,7 @@ def render(f: Filters):
         if skills.empty:
             st.info("No skills have enough salary data with these filters.")
         else:
-            st.plotly_chart(band_chart(skills, "skill_label", "Highest-paying skills (by median)"),
+            st.plotly_chart(band_chart(skills, "skill_label", "Highest-paying skills (median per posting, daily)"),
                             width="stretch")
     with right:
         if pairs.empty:

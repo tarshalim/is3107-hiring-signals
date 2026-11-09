@@ -20,3 +20,8 @@ CREATE TABLE IF NOT EXISTS raw.ingest_runs (
     seconds_taken  NUMERIC     NOT NULL,
     finished_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Added 8 Nov 2026, for the Pipeline health tab (idempotent; on an existing warehouse apply this file once by hand).
+-- NULL = not recorded: days before 8 Nov come from ops/ingest_retries.py, which reads the Airflow task logs.
+ALTER TABLE raw.ingest_runs ADD COLUMN IF NOT EXISTS fetch_attempts SMALLINT;  -- try of fetch_snapshot that wrote the day
+ALTER TABLE raw.ingest_runs ADD COLUMN IF NOT EXISTS retries_429    INTEGER;   -- HTTP 429 retries in that try

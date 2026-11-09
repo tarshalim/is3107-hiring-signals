@@ -58,7 +58,8 @@ def test_dag_settings():
     assert ast.literal_eval(kwargs["max_active_runs"]) == 1
     assert ast.literal_eval(kwargs["schedule"]) == "0 14 * * 2"
     assert ast.unparse(kwargs["start_date"]) == "pendulum.datetime(2026, 10, 20, 14, tz=SGT)"
-    default_args = {k.value: v for k, v in zip(kwargs["default_args"].keys, kwargs["default_args"].values)}
+    default_args = {k.value: v for k, v in zip(kwargs["default_args"].keys, kwargs["default_args"].values)
+                    if k is not None}           # None = a **spread, e.g. **TASK_ALERTS (tests/test_alerts.py)
     assert ast.literal_eval(default_args["retries"]) >= 1
     assert "params" not in kwargs                      # the week comes from the data interval only
 

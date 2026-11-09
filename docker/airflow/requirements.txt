@@ -1,0 +1,9 @@
+# Extra Python packages baked into the team's Airflow image at BUILD time (docker/airflow/Dockerfile).
+# Exact versions: these are what the old start-time install (_PIP_ADDITIONAL_REQUIREMENTS) resolved to on
+# 6 Nov 2026 on apache/airflow:2.10.5, so nothing the DAGs see changes. Change a pin only on purpose, then bump
+# the image tag in docker-compose.yml (is3107-airflow:2.10.5-rN) so every laptop rebuilds. docs/docker-images.md
+openpyxl==3.1.5          # read the SkillsFuture and SSOC reference xlsx files (transform/load_reference.py)
+et-xmlfile==2.0.0        # openpyxl's only dependency, pinned with it
+rapidfuzz==3.14.6        # fuzzy skill matching (transform/skill_mapping.py; without it difflib gives other results)
+# Already in the base image and pinned by its tag, listed so a reader knows the DAGs need them:
+#   numpy==1.26.4 (salary model), pyarrow==19.0.0 (Parquet lake export), psycopg2-binary==2.9.10, requests==2.32.3

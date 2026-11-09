@@ -29,6 +29,7 @@ INSERT_SQL = {
     "competitiveness": build_week.COMPETITIVENESS_SQL,
     "skill_demand": build_week.SKILL_DEMAND_SQL,
     "skill_salary": build_week.SKILL_SALARY_SQL,
+    "group_signals": build_week.GROUP_SIGNALS_SQL,
 }
 
 # The week ending Tue 3 Nov (Wed 28 Oct to Tue 3 Nov), from Tuesday's snapshot
@@ -143,6 +144,61 @@ def test_barrier_uses_views_per_day_within_the_ssoc_group_and_a_lift():
             t["barrier_min_flagged"]) == (0.75, 0.8, 1.5, 25)
 
 
+def test_generic_tags_are_left_out_of_every_skill_level_table():
+    """data/reference/generic_skill_tags.csv: one row per tag with a kind and a one-line reason."""
+    import csv
+    with open(build_week.GENERIC_SKILL_TAGS_CSV, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows and all(r["mcf_skill_name"].strip() and r["reason"].strip() for r in rows)
+    assert {r["kind"] for r in rows} <= {"ambiguous", "fragment", "sector"}
+    tags = THRESHOLDS["generic_skill_tags"]
+    assert "cuts" in tags and tags == sorted(set(tags)) and all(t == t.lower() for t in tags)
+    assert "foot" in tags                     # 8 Nov check: a fragment that topped the 27 Oct shortage list
+    # every skill-level table reads skills through one of these three filtered joins
+    assert "lower(s.mcf_skill_name) <> ALL(%(generic_skill_tags)s::text[])" in build_week._POOL_SKILL
+    for name in ("barrier_skill", "shortage_skill", "competitiveness", "skill_salary"):
+        assert "{_POOL_SKILL}" not in INSERT_SQL[name] and "pool_skill AS (" in INSERT_SQL[name], name
+    competitiveness = " ".join(build_week.COMPETITIVENESS_SQL.split())
+    assert ("WHERE b.job_key IN (SELECT job_key FROM flow_version) AND lower(s.mcf_skill_name) <> "
+            "ALL(%(generic_skill_tags)s::text[])") in competitiveness
+    assert "WHERE lower(sk.mcf_skill_name) <> ALL(%(generic_skill_tags)s::text[])" in \
+        " ".join(build_week.SKILL_DEMAND_SQL.split())
+
+
+def test_shortage_and_barrier_rows_say_whether_the_skill_is_technical():
+    """8 Nov check: commission-sales firms push soft skills up both lists. is_technical = SkillsFuture 'tsc', or an
+    unmapped tag not on data/reference/soft_skill_tags.csv; critical core skills ('ccs') never are."""
+    import csv
+    with open(build_week.SOFT_SKILL_TAGS_CSV, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows and all(r["mcf_skill_name"].strip() and r["reason"].strip() for r in rows)
+    soft = THRESHOLDS["soft_skill_tags"]
+    assert {"positive attitude", "self motivation", "enjoy working with people"} <= set(soft)
+    assert soft == sorted(set(soft)) and all(t == t.lower() for t in soft)
+    # the construction cluster is unmapped and must stay technical
+    assert not {"tendering", "quantity surveying", "cost control"} & set(soft)
+    assert not set(soft) & set(THRESHOLDS["generic_skill_tags"])     # generic tags are dropped, not hidden
+    names = " ".join(build_week._SKILL_NAMES.split())
+    assert ("(ssg_skill_type = 'tsc' OR (ssg_skill_id IS NULL AND lower(mcf_skill_name) <> "
+            "ALL(%(soft_skill_tags)s::text[]))) IS TRUE AS is_technical") in names
+    blocks = _table_blocks(SCHEMA)
+    for name in ("barrier_skill", "shortage_skill"):
+        sql = " ".join(INSERT_SQL[name].split())
+        assert "skill_type, is_technical)" in sql and "n.skill_type, n.is_technical FROM" in sql, name
+        assert "is_technical" in blocks[name] and "skill_type" in blocks[name]
+        assert f"ALTER TABLE metrics.{name:<14} ADD COLUMN IF NOT EXISTS is_technical" in SCHEMA
+
+
+def test_reposted_many_apps_counts_direct_employers_only():
+    """As shortage: agencies keep evergreen ads up and repost them. The experience flags keep every poster."""
+    sql = " ".join(build_week.UNREALISTIC_SQL.split())
+    assert ("SELECT 'reposted_many_apps' AS flag, pw.is_reposted_many_apps AS flagged, pw.category, "
+            "pw.ssoc_major_group, pw.position_level, CASE WHEN pw.salary_usable THEN pw.salary_mid END AS salary_mid "
+            "FROM metrics.posting_week pw WHERE pw.week_end_date = %(e)s AND NOT pw.posted_by_agency UNION ALL") in sql
+    assert sql.count("posted_by_agency") == 1
+    assert "Base: open postings by direct employers" in (REPO / "metrics" / "build_week.py").read_text(encoding="utf-8")
+
+
 def test_one_bulk_employer_cannot_make_a_barrier_or_shortage_skill():
     """top_company_share = the skill's flagged postings from its biggest employer / its flagged postings.
     Above THRESHOLDS["max_top_company_share"] (0.5) the skill is not flagged: is_barrier is false, and the skill
@@ -151,13 +207,76 @@ def test_one_bulk_employer_cannot_make_a_barrier_or_shortage_skill():
     barrier = " ".join(build_week.BARRIER_SQL.split())
     shortage = " ".join(build_week.SHORTAGE_SQL.split())
     assert "WHERE pw.is_barrier_posting GROUP BY ps.skill_ref, pw.company_name" in barrier
-    assert "AND r.top_share <= %(max_top_company_share)s, FALSE)" in barrier
-    assert "WHERE pw.is_shortage GROUP BY ps.skill_ref, pw.company_name" in shortage
-    assert shortage.endswith("WHERE t.top_n::numeric / p.shortage_postings <= %(max_top_company_share)s")
+    assert "AND r.top_share <= %(max_top_company_share)s" in barrier
+    assert "WHERE pw.is_shortage AND NOT pw.posted_by_agency GROUP BY ps.skill_ref, pw.company_name" in shortage
+    assert "WHERE t.top_n::numeric / p.shortage_postings <= %(max_top_company_share)s AND" in shortage
     blocks = _table_blocks(SCHEMA)
     assert "top_company_share" in blocks["barrier_skill"] and "top_company_share" in blocks["shortage_skill"]
     for table in ("barrier_skill ", "shortage_skill"):      # the upgrade block adds it to an existing warehouse
         assert f"ALTER TABLE metrics.{table} ADD COLUMN IF NOT EXISTS top_company_share" in SCHEMA
+
+
+def test_a_shortage_skill_needs_the_same_minimum_lift_as_a_barrier_skill():
+    """8 Nov check: 20 of the 34 listed shortage skills were under 1.5x, the lowest 0.86x."""
+    assert THRESHOLDS["shortage_min_lift"] == THRESHOLDS["barrier_min_lift"] == 1.5
+    shortage = " ".join(build_week.SHORTAGE_SQL.split())
+    assert shortage.endswith("AND (p.shortage_postings::numeric / p.postings) / NULLIF(o.share, 0) "
+                             ">= %(shortage_min_lift)s")
+
+
+def test_one_bulk_employer_cannot_make_a_skills_pay():
+    """8 Nov check: Project Resources topped the skill salary list at $14,000 from 54 of 109 postings by one
+    recruiter. Same cap and employer minimum as shortage and barrier, over the skill's postings with a usable
+    salary, and the pay is employer-weighted: each employer's median first, then the median across employers."""
+    salary = " ".join(build_week.SKILL_SALARY_SQL.split())
+    assert "SELECT job_uuid, company_name, vacancies" in salary
+    assert "JOIN paid p ON p.job_uuid = ps.job_uuid GROUP BY ps.skill_ref, p.company_name" in salary
+    assert "HAVING sum(n) >= %(salary_min_postings)s AND count(*) >= %(min_companies)s" in salary
+    # every percentile of the skill is over the employers' medians, and so is the market it is compared with
+    assert "FROM per_employer GROUP BY skill_ref" in salary
+    assert "percentile_cont(ARRAY[0.25, 0.5, 0.75]) WITHIN GROUP (ORDER BY mid_med) AS mid_q" in salary
+    assert "FROM paid GROUP BY company_name) e" in salary
+    assert salary.endswith("WHERE p.top_n::numeric / p.postings <= %(max_top_company_share)s")
+    assert "is_mapped, postings, companies, vacancies," in salary and "mid_vs_overall, top_company_share)" in salary
+    cols = _table_blocks(SCHEMA)["skill_salary"]
+    assert "top_company_share" in cols and "companies" in cols
+    assert "ALTER TABLE metrics.skill_salary ADD COLUMN IF NOT EXISTS top_company_share" in SCHEMA
+    assert "ALTER TABLE metrics.skill_salary ADD COLUMN IF NOT EXISTS companies" in SCHEMA
+
+
+def test_shortage_reads_direct_employers_only():
+    """Employment agencies (SSIC 78) posted 42% of open postings but 60% of the shortage postings on 3 Nov: their
+    evergreen ads are reposted with few applicants whatever the market does. They stay in posting_week, flagged."""
+    assert THRESHOLDS["agency_ssic_prefix"] == "78"
+    posting = " ".join(build_week.POSTING_WEEK_SQL.split())
+    assert "starts_with(j.company_ssic_code, %(agency_ssic_prefix)s) IS TRUE" in posting
+    shortage = " ".join(build_week.SHORTAGE_SQL.split())
+    # the baseline, the per-skill counts and the biggest-employer cap all leave agencies out
+    assert "FROM metrics.posting_week WHERE week_end_date = %(e)s AND NOT posted_by_agency" in shortage
+    assert "pw.job_uuid = ps.job_uuid AND NOT pw.posted_by_agency GROUP BY ps.skill_ref" in shortage
+    assert shortage.count("posted_by_agency") == 3
+    assert "posted_by_agency" not in build_week.BARRIER_SQL       # barrier is not inflated by agencies
+    assert "posted_by_agency" in _table_blocks(SCHEMA)["posting_week"]
+    assert "ALTER TABLE metrics.posting_week ADD COLUMN IF NOT EXISTS posted_by_agency" in SCHEMA
+
+
+def test_a_barrier_skill_also_converts_below_the_whole_market():
+    """Accounting skills were barriers only next to clerical jobs, the most applied-to group: their postings got
+    more applications per view than the market. A barrier skill now needs rate_vs_overall below 1 too."""
+    assert THRESHOLDS["barrier_max_rate_vs_overall"] == 1.0
+    barrier = " ".join(build_week.BARRIER_SQL.split())
+    assert "AND r.rate / NULLIF(o.apply_rate, 0) < %(barrier_max_rate_vs_overall)s, FALSE)" in barrier
+
+
+def test_group_signals_shares_have_the_same_bases_as_the_signal_tables():
+    sql = " ".join(build_week.GROUP_SIGNALS_SQL.split())
+    assert "count(*) FILTER (WHERE is_shortage AND NOT posted_by_agency) AS shortage_postings" in sql
+    assert "round(shortage_postings::numeric / direct_postings, 4)" in sql
+    # the entry-level base is the one unrealistic_requirements uses
+    assert ("(pw.position_level = ANY(%(entry_levels)s) AND NOT pw.exp_out_of_range "
+            "AND pw.min_years_exp <= %(exp_max_valid)s) IS TRUE AS is_entry") in sql
+    assert "WHERE group_type = 'overall' OR postings >= %(group_min_postings)s" in sql
+    assert re.search(r"PRIMARY KEY \(week_end_date, group_type, group_key\)", _table_blocks(SCHEMA)["group_signals"])
 
 
 def test_barrier_compares_within_2_digit_ssoc_groups_with_a_1_digit_fallback():

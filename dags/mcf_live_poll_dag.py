@@ -37,6 +37,7 @@ from airflow.models import DagRun
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.utils.state import DagRunState
 
+from common.alerts import TASK_ALERTS, on_dag_failure   # dags/common: failure and retry alerts
 from ingestion.mcf_live import DAILY_INGEST_DAG, DEFAULT_PAGES, DEFAULT_PAUSE, ingest_clash, load_poll, \
     poll_file_path, poll_newest, read_poll_file, write_poll_file
 from quality.live_poll_checks import failed_checks, run_live_checks, summarise
@@ -56,7 +57,8 @@ def _warehouse_conn():
     catchup=False,
     max_active_runs=1,
     dagrun_timeout=timedelta(minutes=25),
-    default_args={"retries": 1, "retry_delay": timedelta(minutes=2)},
+    default_args={"retries": 1, "retry_delay": timedelta(minutes=2), **TASK_ALERTS},
+    on_failure_callback=on_dag_failure,   # run-level failures, e.g. a timed-out run (dags/common/alerts.py)
     tags=["ingestion", "mcf", "live"],
     doc_md=__doc__,
 )

@@ -6,7 +6,7 @@
     build_table         one transaction per table: DELETE the week's rows, then INSERT them again
         posting_week              the open postings at the week end with posting-level flags (first)
         barrier_skill, shortage_skill, unrealistic_requirements, competitiveness,
-        skill_demand, skill_salary          (independent of each other: parallel in the DAG)
+        skill_demand, skill_salary, group_signals   (independent of each other: parallel in the DAG)
     run_metric_checks   range and sanity checks on the week's rows (schema, range, business rule, info)
     finish_run_log      rows, seconds and check verdicts, status 'ok' or 'failed_checks'
 
@@ -28,14 +28,39 @@ Definitions shared by all signals:
     and a posting counts once per skill_ref.
   - minimum sample sizes come from THRESHOLDS and are stored with every run in metrics.run_log.
 """
+import csv
 import json
 import time
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 from quality.clean_checks import Check, evaluate, summarise
 from metrics.weeks import MAX_GAP_SNAPSHOTS, week_context
 from transform.parse import EXP_MAX
 from transform.snapshot_week import latest_snapshot_in_week
+
+GENERIC_SKILL_TAGS_CSV = Path(__file__).resolve().parent.parent / "data" / "reference" / "generic_skill_tags.csv"
+SOFT_SKILL_TAGS_CSV = Path(__file__).resolve().parent.parent / "data" / "reference" / "soft_skill_tags.csv"
+
+
+def _tag_names(path: Path) -> list[str]:
+    """The lower-cased mcf_skill_name column of a reference CSV."""
+    with open(path, newline="", encoding="utf-8") as f:
+        return sorted({row["mcf_skill_name"].strip().lower() for row in csv.DictReader(f)})
+
+
+def load_generic_skill_tags(path: Path = GENERIC_SKILL_TAGS_CSV) -> list[str]:
+    """Lower-cased MCF tag names left out of every skill-level table: ambiguous tags like "Cuts" (hair, meat or
+    cost cuts), fragments and sector names. The list and a reason for each are in the CSV."""
+    return _tag_names(path)
+
+
+def load_soft_skill_tags(path: Path = SOFT_SKILL_TAGS_CSV) -> list[str]:
+    """Lower-cased MCF tag names that are personal traits or attitudes ("Positive Attitude", "Self Motivation"),
+    not mapped to SkillsFuture. They stay in every table but are not is_technical, so the dashboard's default
+    "technical skills only" view hides them. The list and a reason for each are in the CSV."""
+    return _tag_names(path)
+
 
 THRESHOLDS = {
     # open postings (metrics/weeks.py): a crawl skip of up to this many snapshots in a row is not a closure
@@ -47,12 +72,27 @@ THRESHOLDS = {
                                      # the top medians then came from 32 to 34 postings, e.g. "Protection", "IPO")
     "demand_min_postings": 30,       # postings with the skill across the whole demand window
     "demand_weeks": 6,               # posting weeks kept in skill_demand, counting back from the snapshot's week
-    "min_companies": 10,             # employers behind a barrier skill, or behind a skill's shortage postings
+    "min_companies": 10,             # employers behind a barrier skill, a skill's shortage postings or its pay
                                      # (on 25 Oct "Aircraft Systems" had 40 shortage postings from ONE employer;
                                      # on 3 Nov, with 5, Metal Fabrication's 57 shortage postings came from 5 firms)
     "max_top_company_share": 0.5,    # a barrier or shortage skill is not flagged when its single biggest employer
                                      # posts more than half of its flagged postings (10 employers can still be
-                                     # one bulk poster plus nine with a posting each)
+                                     # one bulk poster plus nine with a posting each). skill_salary leaves a skill
+                                     # out when one employer posts more than half of its salaried postings
+    # employment agencies: the poster's SSIC 2020 code starts with 78 (employment activities). On 3 Nov they posted
+    # 43% of open postings but 60% of the shortage postings (3.5% of theirs against 1.8% for direct employers):
+    # agencies keep evergreen ads up and repost them, which looks like a shortage but is not one. The shortage
+    # signal reads direct employers only (posting_week.posted_by_agency)
+    "agency_ssic_prefix": "78",
+    # MCF tags too ambiguous to read as a skill, left out of every skill-level table (barrier, shortage, demand,
+    # salary, competitiveness by skill). Stored with the run like every other threshold
+    "generic_skill_tags": load_generic_skill_tags(),
+    # technical skills (barrier_skill.is_technical, shortage_skill.is_technical): a SkillsFuture technical skill
+    # ('tsc'), or an MCF tag not mapped to SkillsFuture unless it is on this list of traits and attitudes. Critical
+    # core skills ('ccs', e.g. Adaptability) are not technical. On 3 Nov commission-sales firms (direct selling,
+    # SSIC 70205 or 47xxx, so not caught as agencies) made 29% of the direct-employer shortage postings and drove
+    # the soft skills to the top of both lists; the dashboard shows technical skills by default
+    "soft_skill_tags": load_soft_skill_tags(),
     # usable monthly salary: below 300 are hourly or daily rates typed into the monthly field (for example $12 to
     # $24 "per month" for a packing job, 1,395 postings below 300 on 25 Oct) and placeholders like $1, above
     # 100,000 are annual figures
@@ -63,24 +103,32 @@ THRESHOLDS = {
     # barrier_group_min_postings open postings that week, else its 1-digit SSOC major group. A barrier POSTING is
     # among the most viewed per day in its group (the group's P75 or more) but gets at most 0.8 times the group's
     # applications per view. A barrier SKILL turns up in barrier postings at least 1.5 times as often as its
-    # postings' groups would predict (lift), in 25+ barrier postings from min_companies employers
+    # postings' groups would predict (lift), in 25+ barrier postings from min_companies employers, AND its postings
+    # get fewer applications per view than all open postings (rate_vs_overall below barrier_max_rate_vs_overall).
+    # Without that last rule, 9 of the top 15 on 3 Nov were accounting skills (General Ledger, QuickBooks) whose
+    # postings got 1.1 to 1.9 times the market's applications per view: low only next to clerical jobs, the most
+    # applied-to group of all, so not hard to fill
     "barrier_group_min_postings": 200,
     "barrier_views_percentile": 0.75,
     "barrier_max_rate_ratio": 0.8,
     "barrier_min_lift": 1.5,
     "barrier_min_flagged": 25,
+    "barrier_max_rate_vs_overall": 1.0,
     # skill shortages: reposted at least twice (2 is the highest count seen) and at most 2 applications in total
     # (totals carry over a repost, so 2 in total means at most 2 since the repost: the conservative side)
     "shortage_min_reposts": 2,
     "shortage_max_applications": 2,
     "shortage_min_flagged": 25,      # flagged postings carrying the skill
+    "shortage_min_lift": 1.5,        # listed only at 1.5 times the direct employers' shortage share or more, as for
+                                     # barrier (8 Nov check: 20 of the 34 listed skills were under 1.5x, the lowest
+                                     # 0.86x, i.e. less likely than the average posting)
     # unrealistic requirements
     # "reposted" here is once or more, against twice for shortage: a posting reposted even once although it was
     # already drawing many applications is the odd case; shortage needs the stronger "again and again"
     "unrealistic_min_reposts": 1,
     "many_apps_percentile": 0.9,     # "many applications" = the P90 of applications per day since posting that week
     "entry_levels": ["Fresh/entry level"],
-    "junior_levels": ["Junior Executive"],   # reported as its own flag: 46% ask 2+ years against 6.6% at entry level
+    "junior_levels": ["Junior Executive"],   # reported as its own flag: 47% ask 2+ years against 6.3% at entry level
     "entry_min_years": 2,
     "exp_max_valid": EXP_MAX,        # the clean layer's cap (30): 32, 50 and 88 years are typing errors
 }
@@ -89,19 +137,24 @@ THRESHOLDS = {
 # the same DAG run from the same snapshot (transform/mom_vacancies.py).
 SIGNAL_TABLES = (
     "barrier_skill", "shortage_skill", "unrealistic_requirements", "competitiveness",
-    "skill_demand", "skill_salary",
+    "skill_demand", "skill_salary", "group_signals",
 )
 
 # ---------------------------------------------------------------------------------------------
 # Shared SQL fragments (CTEs). %(e)s is the week_end_date, %(s)s the snapshot used.
 # ---------------------------------------------------------------------------------------------
-_POOL_SKILL = """
+def _not_generic(alias: str) -> str:
+    """Condition leaving out the tags of data/reference/generic_skill_tags.csv (alias = the clean.dim_skill alias)."""
+    return f"lower({alias}.mcf_skill_name) <> ALL(%(generic_skill_tags)s::text[])"
+
+
+_POOL_SKILL = f"""
     pool_skill AS (   -- one row per open posting and skill_ref
         SELECT DISTINCT pw.job_uuid, COALESCE(s.ssg_skill_id, s.mcf_skill_uuid) AS skill_ref
         FROM metrics.posting_week pw
         JOIN clean.bridge_job_skill b ON b.job_key = pw.job_key
         JOIN clean.dim_skill s ON s.skill_key = b.skill_key
-        WHERE pw.week_end_date = %(e)s
+        WHERE pw.week_end_date = %(e)s AND {_not_generic("s")}
     )"""
 
 _SKILL_NAMES = """
@@ -111,7 +164,10 @@ _SKILL_NAMES = """
                COALESCE(ssg_skill_title, mcf_skill_name) AS skill_name,
                ssg_skill_id IS NOT NULL                  AS is_mapped,
                ssg_skill_type                            AS skill_type,   -- 'tsc' / 'ccs', NULL when not mapped
-               COALESCE(is_casl, FALSE)                  AS is_casl
+               COALESCE(is_casl, FALSE)                  AS is_casl,
+               -- technical: a SkillsFuture technical skill, or an unmapped tag that is not a trait or attitude
+               (ssg_skill_type = 'tsc' OR (ssg_skill_id IS NULL
+                AND lower(mcf_skill_name) <> ALL(%(soft_skill_tags)s::text[]))) IS TRUE AS is_technical
         FROM clean.dim_skill
         ORDER BY COALESCE(ssg_skill_id, mcf_skill_uuid), skill_key
     )"""
@@ -132,7 +188,7 @@ INSERT INTO metrics.posting_week (
     original_posting_date, new_posting_date, expiry_date,
     views_total, applications_total, repost_count, days_since_original_posting, apps_per_day_since_posting,
     views_per_day_since_posting, is_shortage, is_reposted_many_apps, is_barrier_posting, is_entry_2plus,
-    is_junior_2plus)
+    is_junior_2plus, posted_by_agency)
 WITH latest AS (
     -- each posting's latest sighting on or before the snapshot, inside the gap window
     SELECT DISTINCT ON (f.job_uuid)
@@ -167,7 +223,8 @@ SELECT %(e)s, %(s)s, o.job_uuid, o.job_key, o.snapshot_date, o.snapshot_date = %
        (j.position_level = ANY(%(entry_levels)s)
         AND NOT j.exp_out_of_range AND j.min_years_exp BETWEEN %(entry_min_years)s AND %(exp_max_valid)s) IS TRUE,
        (j.position_level = ANY(%(junior_levels)s)
-        AND NOT j.exp_out_of_range AND j.min_years_exp BETWEEN %(entry_min_years)s AND %(exp_max_valid)s) IS TRUE
+        AND NOT j.exp_out_of_range AND j.min_years_exp BETWEEN %(entry_min_years)s AND %(exp_max_valid)s) IS TRUE,
+       starts_with(j.company_ssic_code, %(agency_ssic_prefix)s) IS TRUE      -- posted by an employment agency
 FROM open_postings o
 JOIN clean.dim_job j ON j.job_key = o.job_key
 """
@@ -175,7 +232,7 @@ JOIN clean.dim_job j ON j.job_key = o.job_key
 
 # Each posting's comparison group: the 2-digit SSOC code (e.g. '24', business and administration professionals)
 # when that group has enough open postings this week for a stable P75, else the 1-digit major group (e.g. '2').
-# On 3 Nov: 31 two-digit groups and 6 one-digit fallbacks; 573 of 88,610 postings fell back.
+# On 3 Nov: 31 two-digit groups and 6 one-digit fallbacks; 575 of 88,667 postings fell back.
 BARRIER_GROUP_SQL = """
 UPDATE metrics.posting_week pw
 SET barrier_group = CASE WHEN c.n >= %(barrier_group_min_postings)s THEN left(pw.ssoc_code, 2)
@@ -242,17 +299,19 @@ def _build_posting_week(cur, p) -> dict:
 # ---------------------------------------------------------------------------------------------
 # Signal 1: barrier skills
 # ---------------------------------------------------------------------------------------------
-def _top_company(flag: str) -> str:
+def _top_company(flag: str, direct_only: bool = False) -> str:
     """CTE top_company: per skill, how many of its flagged postings (flag = a posting_week column) come from its
     single biggest employer. Divided by the skill's flagged postings it gives top_company_share: above
-    THRESHOLDS["max_top_company_share"] one bulk poster, not the market, makes the signal."""
+    THRESHOLDS["max_top_company_share"] one bulk poster, not the market, makes the signal. direct_only leaves
+    out postings by employment agencies, as the shortage signal does."""
+    direct = " AND NOT pw.posted_by_agency" if direct_only else ""
     return f"""
     top_company AS (
         SELECT skill_ref, max(n) AS top_n
         FROM (SELECT ps.skill_ref, pw.company_name, count(*) AS n
               FROM pool_skill ps
               JOIN metrics.posting_week pw ON pw.week_end_date = %(e)s AND pw.job_uuid = ps.job_uuid
-              WHERE pw.{flag}
+              WHERE pw.{flag}{direct}
               GROUP BY ps.skill_ref, pw.company_name) per_company
         GROUP BY skill_ref
     )"""
@@ -261,7 +320,7 @@ def _top_company(flag: str) -> str:
 BARRIER_SQL = f"""
 INSERT INTO metrics.barrier_skill (week_end_date, snapshot_date, skill_ref, skill_name, is_mapped, is_casl,
     postings, companies, barrier_postings, barrier_companies, top_company_share, barrier_share, expected_share, lift,
-    views, applications, apply_rate, overall_apply_rate, rate_vs_overall, is_barrier)
+    views, applications, apply_rate, overall_apply_rate, rate_vs_overall, is_barrier, skill_type, is_technical)
 WITH {_POOL_SKILL}, {_SKILL_NAMES}, {_top_company("is_barrier_posting")},
 group_share AS (
     -- share of barrier postings in each comparison group: what a posting of that group shows on average
@@ -301,23 +360,27 @@ SELECT %(e)s, %(s)s, r.skill_ref, n.skill_name, n.is_mapped, n.is_casl,
        round(r.rate / NULLIF(o.apply_rate, 0), 3),
        COALESCE(r.lift >= %(barrier_min_lift)s AND r.barrier_postings >= %(barrier_min_flagged)s
                 AND r.barrier_companies >= %(min_companies)s
-                AND r.top_share <= %(max_top_company_share)s, FALSE)
+                AND r.top_share <= %(max_top_company_share)s
+                -- and fewer applications per view than the whole market, not only than similar jobs
+                AND r.rate / NULLIF(o.apply_rate, 0) < %(barrier_max_rate_vs_overall)s, FALSE),
+       n.skill_type, n.is_technical
 FROM rated r
 CROSS JOIN overall o
 JOIN skill_names n ON n.skill_ref = r.skill_ref
 """
 
 # ---------------------------------------------------------------------------------------------
-# Signal 2: skill shortages
+# Signal 2: skill shortages (direct employers only: agencies' evergreen ads are reposted with few applicants
+# whatever the market does, THRESHOLDS["agency_ssic_prefix"])
 # ---------------------------------------------------------------------------------------------
 SHORTAGE_SQL = f"""
 INSERT INTO metrics.shortage_skill (week_end_date, snapshot_date, skill_ref, skill_name, is_mapped, is_casl,
     postings, shortage_postings, shortage_companies, top_company_share, shortage_share, overall_shortage_share, lift,
-    median_repost_count, median_applications)
-WITH {_POOL_SKILL}, {_SKILL_NAMES}, {_top_company("is_shortage")},
+    median_repost_count, median_applications, skill_type, is_technical)
+WITH {_POOL_SKILL}, {_SKILL_NAMES}, {_top_company("is_shortage", direct_only=True)},
 overall AS (
     SELECT count(*) FILTER (WHERE is_shortage)::numeric / NULLIF(count(*), 0) AS share
-    FROM metrics.posting_week WHERE week_end_date = %(e)s
+    FROM metrics.posting_week WHERE week_end_date = %(e)s AND NOT posted_by_agency
 ),
 per_skill AS (
     SELECT ps.skill_ref, count(*) AS postings,
@@ -328,6 +391,7 @@ per_skill AS (
            percentile_cont(0.5) WITHIN GROUP (ORDER BY pw.applications_total) FILTER (WHERE pw.is_shortage) AS median_apps
     FROM pool_skill ps
     JOIN metrics.posting_week pw ON pw.week_end_date = %(e)s AND pw.job_uuid = ps.job_uuid
+                                AND NOT pw.posted_by_agency
     GROUP BY ps.skill_ref
     HAVING count(*) >= %(skill_min_postings)s
        AND count(*) FILTER (WHERE pw.is_shortage) >= %(shortage_min_flagged)s
@@ -339,13 +403,16 @@ SELECT %(e)s, %(s)s, p.skill_ref, n.skill_name, n.is_mapped, n.is_casl,
        round(p.shortage_postings::numeric / p.postings, 4),
        round(o.share, 4),
        round((p.shortage_postings::numeric / p.postings) / NULLIF(o.share, 0), 3),
-       round(p.median_reposts::numeric, 1), round(p.median_apps::numeric, 1)
+       round(p.median_reposts::numeric, 1), round(p.median_apps::numeric, 1),
+       n.skill_type, n.is_technical
 FROM per_skill p
 JOIN top_company t ON t.skill_ref = p.skill_ref
 CROSS JOIN overall o
 JOIN skill_names n ON n.skill_ref = p.skill_ref
--- a skill is listed (flagged) only if no single employer posts more than max_top_company_share of its shortage postings
+-- a skill is listed (flagged) only if no single employer posts more than max_top_company_share of its shortage postings,
+-- and its shortage share is at least shortage_min_lift times the direct employers' share
 WHERE t.top_n::numeric / p.shortage_postings <= %(max_top_company_share)s
+  AND (p.shortage_postings::numeric / p.postings) / NULLIF(o.share, 0) >= %(shortage_min_lift)s
 """
 
 # ---------------------------------------------------------------------------------------------
@@ -357,11 +424,13 @@ INSERT INTO metrics.unrealistic_requirements (week_end_date, snapshot_date, flag
     other_salary_mid_median, rule)
 WITH {_MAJOR_TITLES},
 base AS (
+    -- direct employers only, as for shortage: agencies keep evergreen ads up and repost them (on 3 Nov the top
+    -- employers of this flag were agencies). "Many applications" stays the P90 over all open postings
     SELECT 'reposted_many_apps' AS flag, pw.is_reposted_many_apps AS flagged,
            pw.category, pw.ssoc_major_group, pw.position_level,
            CASE WHEN pw.salary_usable THEN pw.salary_mid END AS salary_mid
     FROM metrics.posting_week pw
-    WHERE pw.week_end_date = %(e)s
+    WHERE pw.week_end_date = %(e)s AND NOT pw.posted_by_agency
     UNION ALL
     -- entry level and junior are separate flags: their shares differ several times over
     SELECT CASE WHEN pw.position_level = ANY(%(entry_levels)s) THEN 'entry_level_2plus_years'
@@ -412,7 +481,7 @@ def _build_unrealistic(cur, p) -> dict:
         "rule_reposted": (f"reposted (repost_count {p['unrealistic_min_reposts']} or more) with {many:g} or more "
                           f"applications per day since first posted (applications_total / days since "
                           f"original_posting_date, at least 1 day), the P{pct} of open postings this week. "
-                          f"Base: all open postings"),
+                          f"Base: open postings by direct employers (employment agencies left out, as for shortage)"),
         "rule_entry": experience_rule(p["entry_levels"]),
         "rule_junior": experience_rule(p["junior_levels"]),
     }
@@ -471,7 +540,7 @@ version_skill AS (
     SELECT DISTINCT b.job_key, COALESCE(s.ssg_skill_id, s.mcf_skill_uuid) AS skill_ref
     FROM clean.bridge_job_skill b
     JOIN clean.dim_skill s ON s.skill_key = b.skill_key
-    WHERE b.job_key IN (SELECT job_key FROM flow_version)
+    WHERE b.job_key IN (SELECT job_key FROM flow_version) AND {_not_generic("s")}
 ),
 flow_rows AS (
     SELECT g.group_type, g.group_key, fv.job_uuid, fv.apps, fv.views, fv.hours
@@ -535,6 +604,7 @@ job_skill AS (
     FROM recent r
     JOIN clean.bridge_job_skill b ON b.job_key = r.job_key
     JOIN clean.dim_skill sk ON sk.skill_key = b.skill_key
+    WHERE {_not_generic("sk")}
 ),
 per AS (
     SELECT skill_ref, posting_week, count(*) AS new_postings, sum(vacancies) AS new_vacancies,
@@ -555,37 +625,105 @@ WHERE p.skill_total >= %(demand_min_postings)s
 
 # ---------------------------------------------------------------------------------------------
 # Signal 5b: salary per skill (open postings, monthly, as advertised)
+# Employer-weighted (8 Nov): each employer's median first, then the median (and P25/P75) across employers, so
+# one employer counts once however many ads it posts. Before, 54 of Project Resources' 109 postings were one
+# recruiter's $10-18k site manager ads, which made it the top-paid skill at $14,000.
 # ---------------------------------------------------------------------------------------------
 SKILL_SALARY_SQL = f"""
 INSERT INTO metrics.skill_salary (week_end_date, snapshot_date, skill_ref, skill_name, is_mapped, postings,
-    vacancies, salary_min_median, salary_max_median, salary_mid_p25, salary_mid_median, salary_mid_p75,
-    mid_vs_overall)
+    companies, vacancies, salary_min_median, salary_max_median, salary_mid_p25, salary_mid_median, salary_mid_p75,
+    mid_vs_overall, top_company_share)
 WITH {_POOL_SKILL}, {_SKILL_NAMES},
 paid AS (
-    SELECT job_uuid, vacancies, salary_min, salary_max, salary_mid
+    SELECT job_uuid, company_name, vacancies, salary_min, salary_max, salary_mid
     FROM metrics.posting_week
     WHERE week_end_date = %(e)s AND salary_usable
 ),
-overall AS (
-    SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY salary_mid) AS mid FROM paid
-),
-per_skill AS (
-    SELECT ps.skill_ref, count(*) AS postings, sum(p.vacancies) AS vacancies,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY p.salary_min)                 AS min_med,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY p.salary_max)                 AS max_med,
-           percentile_cont(ARRAY[0.25, 0.5, 0.75]) WITHIN GROUP (ORDER BY p.salary_mid) AS mid_q
+per_employer AS (   -- one row per skill and employer: its salaried postings and its own medians
+    SELECT ps.skill_ref, p.company_name, count(*) AS n, sum(p.vacancies) AS vacancies,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY p.salary_min) AS min_med,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY p.salary_max) AS max_med,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY p.salary_mid) AS mid_med
     FROM pool_skill ps
     JOIN paid p ON p.job_uuid = ps.job_uuid
-    GROUP BY ps.skill_ref
-    HAVING count(*) >= %(salary_min_postings)s
+    GROUP BY ps.skill_ref, p.company_name
+),
+overall AS (   -- the market, weighted the same way: each employer's median midpoint, then the median of those
+    SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY mid_med) AS mid
+    FROM (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY salary_mid) AS mid_med
+          FROM paid GROUP BY company_name) e
+),
+per_skill AS (
+    SELECT skill_ref, sum(n) AS postings, count(*) AS companies, max(n) AS top_n, sum(vacancies) AS vacancies,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY min_med)                 AS min_med,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY max_med)                 AS max_med,
+           percentile_cont(ARRAY[0.25, 0.5, 0.75]) WITHIN GROUP (ORDER BY mid_med) AS mid_q
+    FROM per_employer
+    GROUP BY skill_ref
+    -- as for barrier and shortage: a skill's pay needs salaried postings from min_companies employers
+    HAVING sum(n) >= %(salary_min_postings)s AND count(*) >= %(min_companies)s
 )
-SELECT %(e)s, %(s)s, p.skill_ref, n.skill_name, n.is_mapped, p.postings, p.vacancies,
+SELECT %(e)s, %(s)s, p.skill_ref, n.skill_name, n.is_mapped, p.postings, p.companies, p.vacancies,
        round(p.min_med::numeric, 2), round(p.max_med::numeric, 2),
        round(p.mid_q[1]::numeric, 2), round(p.mid_q[2]::numeric, 2), round(p.mid_q[3]::numeric, 2),
-       round(p.mid_q[2]::numeric / NULLIF(o.mid::numeric, 0), 3)
+       round(p.mid_q[2]::numeric / NULLIF(o.mid::numeric, 0), 3),
+       round(p.top_n::numeric / p.postings, 4)
 FROM per_skill p
 CROSS JOIN overall o
 JOIN skill_names n ON n.skill_ref = p.skill_ref
+-- as for shortage: a skill's pay is left out when one employer posts more than max_top_company_share of it
+WHERE p.top_n::numeric / p.postings <= %(max_top_company_share)s
+"""
+
+# ---------------------------------------------------------------------------------------------
+# Summary by group: the share of each posting-level flag per job category and SSOC major group, so the
+# dashboard can show side by side which cause shows up where (competitiveness has the applications per day)
+# ---------------------------------------------------------------------------------------------
+GROUP_SIGNALS_SQL = f"""
+INSERT INTO metrics.group_signals (week_end_date, snapshot_date, group_type, group_key, group_label, postings,
+    agency_share, direct_postings, shortage_postings, shortage_share, barrier_postings, barrier_share,
+    entry_postings, entry_2plus_postings, entry_2plus_share, salary_mid_median)
+WITH {_MAJOR_TITLES},
+group_rows AS (
+    SELECT g.group_type, g.group_key, g.group_label, pw.posted_by_agency, pw.is_shortage, pw.is_barrier_posting,
+           pw.is_entry_2plus, pw.salary_usable, pw.salary_mid,
+           -- the base of the entry-level flag, as in unrealistic_requirements
+           (pw.position_level = ANY(%(entry_levels)s) AND NOT pw.exp_out_of_range
+            AND pw.min_years_exp <= %(exp_max_valid)s) IS TRUE AS is_entry
+    FROM metrics.posting_week pw
+    LEFT JOIN major_titles mt ON mt.major_group = pw.ssoc_major_group
+    CROSS JOIN LATERAL (VALUES
+        ('overall', 'all', 'All postings'),
+        ('category', pw.category, pw.category),
+        ('ssoc_major_group', pw.ssoc_major_group::text, COALESCE(mt.title, 'SSOC major group ' || pw.ssoc_major_group))
+    ) AS g (group_type, group_key, group_label)
+    WHERE pw.week_end_date = %(e)s AND g.group_key IS NOT NULL
+),
+grouped AS (
+    SELECT group_type, group_key, max(group_label) AS group_label, count(*) AS postings,
+           count(*) FILTER (WHERE posted_by_agency)                     AS agency_postings,
+           count(*) FILTER (WHERE NOT posted_by_agency)                 AS direct_postings,
+           count(*) FILTER (WHERE is_shortage AND NOT posted_by_agency) AS shortage_postings,
+           count(*) FILTER (WHERE is_barrier_posting)                   AS barrier_postings,
+           count(*) FILTER (WHERE is_entry)                             AS entry_postings,
+           count(*) FILTER (WHERE is_entry_2plus)                       AS entry_2plus_postings,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY salary_mid) FILTER (WHERE salary_usable) AS salary_mid
+    FROM group_rows
+    GROUP BY group_type, group_key
+)
+-- a share needs group_min_postings postings under it, else it is NULL (the dashboard shows a blank cell)
+SELECT %(e)s, %(s)s, group_type, group_key, group_label, postings,
+       round(agency_postings::numeric / postings, 4),
+       direct_postings, shortage_postings,
+       CASE WHEN direct_postings >= %(group_min_postings)s
+            THEN round(shortage_postings::numeric / direct_postings, 4) END,
+       barrier_postings, round(barrier_postings::numeric / postings, 4),
+       entry_postings, entry_2plus_postings,
+       CASE WHEN entry_postings >= %(group_min_postings)s
+            THEN round(entry_2plus_postings::numeric / entry_postings, 4) END,
+       round(salary_mid::numeric, 2)
+FROM grouped
+WHERE group_type = 'overall' OR postings >= %(group_min_postings)s
 """
 
 def _sql_step(sql):
@@ -604,6 +742,7 @@ BUILDERS = {
     "competitiveness": _sql_step(COMPETITIVENESS_SQL),
     "skill_demand": _sql_step(SKILL_DEMAND_SQL),
     "skill_salary": _sql_step(SKILL_SALARY_SQL),
+    "group_signals": _sql_step(GROUP_SIGNALS_SQL),
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -618,7 +757,8 @@ METRIC_CHECKS = [
           "==", 1, "exactly one overall competitiveness row"),
     *[Check(f"{t}_rows", "schema", "warn", f"SELECT count(*) FROM metrics.{t} WHERE week_end_date = %(e)s",
             ">=", 1, f"{t} has rows (none means no skill reached the minimum sample size)")
-      for t in ("barrier_skill", "shortage_skill", "skill_demand", "skill_salary", "unrealistic_requirements")],
+      for t in ("barrier_skill", "shortage_skill", "skill_demand", "skill_salary", "unrealistic_requirements",
+                "group_signals")],
     Check("shares_outside_0_1", "range", "fail",
           """SELECT (SELECT count(*) FROM metrics.shortage_skill WHERE week_end_date = %(e)s
                        AND (shortage_share NOT BETWEEN 0 AND 1 OR lift < 0 OR top_company_share NOT BETWEEN 0 AND 1))
@@ -626,9 +766,16 @@ METRIC_CHECKS = [
                        AND (flagged_share NOT BETWEEN 0 AND 1 OR flagged_postings > base_postings))
                   + (SELECT count(*) FROM metrics.skill_demand WHERE week_end_date = %(e)s
                        AND share_of_week NOT BETWEEN 0 AND 1)
+                  + (SELECT count(*) FROM metrics.skill_salary WHERE week_end_date = %(e)s
+                       AND top_company_share NOT BETWEEN 0 AND 1)
                   + (SELECT count(*) FROM metrics.barrier_skill WHERE week_end_date = %(e)s
                        AND (barrier_share NOT BETWEEN 0 AND 1 OR lift < 0 OR barrier_postings > postings
-                            OR top_company_share NOT BETWEEN 0 AND 1))""",
+                            OR top_company_share NOT BETWEEN 0 AND 1))
+                  + (SELECT count(*) FROM metrics.group_signals WHERE week_end_date = %(e)s
+                       AND (agency_share NOT BETWEEN 0 AND 1 OR shortage_share NOT BETWEEN 0 AND 1
+                            OR barrier_share NOT BETWEEN 0 AND 1 OR entry_2plus_share NOT BETWEEN 0 AND 1
+                            OR shortage_postings > direct_postings OR direct_postings > postings
+                            OR entry_2plus_postings > entry_postings))""",
           "==", 0, "every share is between 0 and 1 and no group has more flagged than base postings"),
     Check("negative_rates", "range", "fail",
           """SELECT (SELECT count(*) FROM metrics.competitiveness WHERE week_end_date = %(e)s

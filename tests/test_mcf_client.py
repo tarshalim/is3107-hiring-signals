@@ -81,3 +81,23 @@ def test_retry_logs_reason(caplog):
     # The next retry must still be a LoggedRetry, or only the first retry would be logged.
     assert isinstance(next_retry, mcf_client.LoggedRetry)
     assert next_retry.total == retry.total - 1
+
+
+class Fake429(FakeUrllib3Resp):
+    status = 429
+
+
+def test_retries_are_counted_by_reason_across_retry_copies(tmp_path, monkeypatch):
+    """urllib3 makes a new Retry per retry: the session's counter must see every one (Pipeline health, 8 Nov)."""
+    session = mcf_client.make_session()
+    retry = session.get_adapter(mcf_client.BASE_URL).max_retries
+    second = retry.increment("GET", "/v2/jobs?page=1", response=Fake429())
+    third = second.increment("GET", "/v2/jobs?page=1", response=Fake429())
+    third.increment("GET", "/v2/jobs?page=2", response=FakeUrllib3Resp())
+    assert session.retry_counts == {"429": 2, "400": 1}
+    # snapshot_to_file reports the session's 429s; a session without our retry reports None (unknown)
+    monkeypatch.setattr(mcf_client, "PAGE_SIZE", 2)
+    pages = [[{"uuid": "a"}]]
+    session.get = FakeSession(pages).get
+    assert mcf_client.snapshot_to_file(tmp_path / "a.jsonl.gz", session=session)["retries_429"] == 2
+    assert mcf_client.snapshot_to_file(tmp_path / "b.jsonl.gz", session=FakeSession(pages))["retries_429"] is None

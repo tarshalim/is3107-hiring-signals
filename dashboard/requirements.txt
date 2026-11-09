@@ -1,5 +1,9 @@
-streamlit>=1.50
-plotly>=5.20
-pandas>=2.0
-numpy>=1.26
-psycopg2-binary>=2.9
+# Exact versions, so a rebuild next week gives the same dashboard (docs/docker-images.md). Checked on 6 Nov 2026:
+# every tab renders against the warehouse with these (Streamlit AppTest in the built image). A fresh unpinned
+# build that day would have pulled pandas 3.1, a major version the dashboard was never run with.
+# Change a pin only on purpose, then bump the dashboard image tag in docker-compose.yml.
+streamlit==1.67.0
+plotly==7.1.0
+pandas==2.3.3
+numpy==2.4.3
+psycopg2-binary==2.9.11

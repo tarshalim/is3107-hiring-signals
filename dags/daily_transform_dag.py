@@ -51,6 +51,7 @@ try:  # Airflow 3
 except ImportError:  # Airflow 2
     from airflow.operators.python import get_current_context
 
+from common.alerts import TASK_ALERTS, on_dag_failure   # dags/common: failure and retry alerts
 from quality.clean_checks import failed_checks, run_checks, summarise
 from transform.load_reference import load_reference
 from transform.refresh_marts import rebuild_marts
@@ -82,7 +83,8 @@ def _snapshot_date_from_context() -> str:
     start_date=pendulum.datetime(2026, 10, 24, tz=SGT),
     catchup=False,
     max_active_runs=1,        # SCD2 versioning must see days in order
-    default_args={"retries": 2, "retry_delay": timedelta(minutes=5)},
+    default_args={"retries": 2, "retry_delay": timedelta(minutes=5), **TASK_ALERTS},
+    on_failure_callback=on_dag_failure,   # run-level failures, e.g. a timed-out run (dags/common/alerts.py)
     params={"snapshot_date": ""},
     tags=["transform", "warehouse", "mcf"],
     doc_md=__doc__,

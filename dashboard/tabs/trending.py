@@ -6,12 +6,20 @@ from dashboard import queries
 from dashboard.filters import SKILL_TYPE_LABELS, Filters
 
 
+WOW = "Last 7 days against the 7 before (relative %)"
+
+
 def render(f: Filters, days_of_history: int):
     st.subheader(f"Top 20 skills, last {f.window_days} days")
-    st.caption("Share = percentage of postings (in the filtered slice) that list the skill. "
-               "Change compares the last 7 days with the 7 days before, on share, so it is not distorted "
-               "by the total number of postings changing.")
-    top = queries.trending_skills(f)
+    technical = st.toggle("Technical skills only", value=True, key="trending_technical",
+                          help="As on the Hiring signals tab: hides SkillsFuture critical core skills and MCF tags "
+                               "that are traits or attitudes (e.g. Positive Attitude).")
+    st.caption("Share = percentage of postings (in the filtered slice) that list the skill. Generic tags (sector "
+               "names like Construction, ambiguous tags like Treatment) are left out, as on the weekly tabs. "
+               "**Week-over-week change is relative, not in points:** it compares the skill's share in the last "
+               "7 days with the 7 days before, so +10% means a share of 5.0% rose to 5.5%. Comparing shares keeps "
+               "it from moving with the total number of postings.")
+    top = queries.trending_skills(f, technical_only=technical)
     if top.empty:
         st.info("No skills match these filters. Widen the filters or the window.")
         return
@@ -28,7 +36,7 @@ def render(f: Filters, days_of_history: int):
     left.plotly_chart(chart, width="stretch")
 
     with right:
-        st.markdown("**Week-over-week change**")
+        st.markdown("**Change in share, last 7 days against the 7 before (relative %, not points)**")
         if days_of_history < 14:
             st.caption("Needs 14 days of history.")
         else:
@@ -39,7 +47,7 @@ def render(f: Filters, days_of_history: int):
                 shown = movers.assign(change=movers["wow_pct"].round(1))[["skill_label", "change"]]
                 bars = px.bar(shown, x="change", y="skill_label", orientation="h",
                               color="change", color_continuous_scale="RdYlGn", color_continuous_midpoint=0,
-                              labels={"change": "% change in share", "skill_label": ""})
+                              labels={"change": "Relative change in share (%)", "skill_label": ""})
                 bars.update_layout(height=max(420, 28 * len(shown)), coloraxis_showscale=False)
                 st.plotly_chart(bars, width="stretch")
 
@@ -59,5 +67,5 @@ def render(f: Filters, days_of_history: int):
         st.dataframe(top[["skill_label", "type_label", "is_emerging", "mentions", "share_pct", "wow_pct"]]
                      .rename(columns={"skill_label": "Skill", "type_label": "Type", "is_emerging": "Emerging",
                                       "mentions": "Posting-days", "share_pct": "% of postings",
-                                      "wow_pct": "WoW change %"}),
+                                      "wow_pct": WOW}),
                      width="stretch", hide_index=True)

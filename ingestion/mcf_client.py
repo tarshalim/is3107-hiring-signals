@@ -9,6 +9,7 @@ import gzip
 import json
 import logging
 import time
+from collections import Counter
 from pathlib import Path
 
 import requests
@@ -24,11 +25,22 @@ log = logging.getLogger(__name__)
 
 class LoggedRetry(Retry):
     """Retry that writes one warning line per retry, so the Airflow task log
-    shows why a run was slow (429 rate limit vs. server errors)."""
+    shows why a run was slow (429 rate limit vs. server errors), and counts the
+    retries by reason in `counts` (a Counter shared by the session, see make_session)."""
+
+    counts = None
+
+    def new(self, **kw):
+        # urllib3 makes a new Retry object for every retry; carry the shared counter over
+        retry = super().new(**kw)
+        retry.counts = self.counts
+        return retry
 
     def increment(self, method=None, url=None, response=None, error=None, *args, **kwargs):
         reason = response.status if response is not None else repr(error)
         log.warning("MCF retry: %s (reason: %s)", url, reason)
+        if self.counts is not None:
+            self.counts[str(reason) if response is not None else "connection"] += 1
         return super().increment(method, url, response, error, *args, **kwargs)
 
 
@@ -45,9 +57,11 @@ def make_session() -> requests.Session:
         status_forcelist=[400, 429, 500, 502, 503, 504],
         allowed_methods=["GET"],
     )
+    retry.counts = Counter()
     session = requests.Session()
     session.mount("https://", HTTPAdapter(max_retries=retry))
     session.headers["User-Agent"] = USER_AGENT
+    session.retry_counts = retry.counts     # read by snapshot_to_file: how many 429s the run hit
     return session
 
 
@@ -98,12 +112,14 @@ def snapshot_to_file(out_path: Path, max_pages: int = 0, session=None) -> dict:
                 seen.add(uuid)
                 f.write(json.dumps(job, ensure_ascii=False) + "\n")
                 jobs_written += 1
+    counts = getattr(session, "retry_counts", None)     # None for a session without our retry (tests)
     return {
         "path": str(out_path),
         "pages_fetched": pages,
         "jobs_fetched": jobs_written,
         "api_total": api_total,
         "seconds_taken": round(time.monotonic() - start, 1),
+        "retries_429": counts.get("429", 0) if counts is not None else None,
     }
 
 

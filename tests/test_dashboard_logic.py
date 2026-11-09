@@ -5,7 +5,6 @@ pd = pytest.importorskip("pandas")
 
 from dashboard import transitions as t  # noqa: E402
 from dashboard.filters import Filters  # noqa: E402
-from dashboard.scoring import difficulty_index  # noqa: E402
 
 
 @pytest.fixture
@@ -76,21 +75,3 @@ def test_missing_skills_excludes_owned_ones(profiles):
     missing = t.missing_skills("B", ["sql"], shares)
     assert "SQL" not in missing["skill_label"].tolist()
     assert missing.iloc[0]["skill_label"] == "Python"
-
-
-def test_difficulty_index_ranks_few_applications_many_reposts_long_open_as_hardest():
-    frame = pd.DataFrame({
-        "applications_per_posting": [0.5, 2.0, 5.0],
-        "repost_rate": [0.20, 0.10, 0.02],
-        "avg_days_open": [40, 20, 5],
-    })
-    scores = difficulty_index(frame)
-    assert scores.is_monotonic_decreasing
-    assert scores.between(0, 100).all()
-
-
-def test_difficulty_index_skips_signals_with_no_data():
-    frame = pd.DataFrame({"applications_per_posting": [1.0, 3.0], "repost_rate": [0.2, 0.1],
-                          "avg_days_open": [float("nan"), float("nan")]})
-    scores = difficulty_index(frame)
-    assert scores.notna().all() and scores.iloc[0] != scores.iloc[1]

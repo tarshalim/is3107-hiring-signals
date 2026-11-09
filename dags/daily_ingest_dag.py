@@ -1,6 +1,7 @@
 """Daily MyCareersFuture snapshot.
 
-fetch_snapshot -> check_snapshot -> load_raw
+fetch_snapshot -> check_snapshot -+-> load_raw
+                                  +-> check_schema_drift   (warn only; beside load_raw, never in its way)
 
 Runs once a day (Singapore time). Each run saves the API's postings to
 data/raw/mcf/<date>.jsonl.gz and loads them into raw.mcf_job_snapshots.
@@ -14,12 +15,19 @@ from pathlib import Path
 
 import pendulum
 from airflow.decorators import dag, task
-from airflow.exceptions import AirflowFailException
+from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from psycopg2.extras import execute_values
 
-from ingestion.mcf_client import read_snapshot_batches, snapshot_to_file
-from quality.snapshot_checks import snapshot_problem
+try:  # Airflow 3
+    from airflow.sdk import get_current_context
+except ImportError:  # Airflow 2
+    from airflow.operators.python import get_current_context
+
+from common.alerts import TASK_ALERTS, on_dag_failure   # dags/common: failure and retry alerts
+from ingestion.mcf_client import read_snapshot, read_snapshot_batches, snapshot_to_file
+from quality.snapshot_checks import (DRIFT_SAMPLE, drift_tables_ready, field_stats, record_schema_drift,
+                                     snapshot_problem)
 
 RAW_DIR = Path("/opt/airflow/data/raw/mcf")
 MIN_JOBS = 100          # fewer than this means something is wrong with the API call
@@ -33,7 +41,8 @@ BATCH_SIZE = 1000       # rows per INSERT when loading into Postgres
     start_date=pendulum.datetime(2026, 10, 21, tz="Asia/Singapore"),
     catchup=False,         # past days can't be re-fetched, so never backfill
     max_active_runs=1,
-    default_args={"retries": 3, "retry_delay": timedelta(minutes=10)},
+    default_args={"retries": 3, "retry_delay": timedelta(minutes=10), **TASK_ALERTS},
+    on_failure_callback=on_dag_failure,   # run-level failures, e.g. a timed-out run (dags/common/alerts.py)
     tags=["ingestion", "mcf"],
 )
 def daily_mcf_ingest():
@@ -46,6 +55,8 @@ def daily_mcf_ingest():
         max_pages = int(os.environ.get("MCF_MAX_PAGES", "0"))
         stats = snapshot_to_file(RAW_DIR / f"{snapshot_date}.jsonl.gz", max_pages=max_pages)
         stats["snapshot_date"] = snapshot_date
+        # which try of this task wrote the day (1 = no retry), for the Pipeline health tab's reliability numbers
+        stats["fetch_attempts"] = get_current_context()["ti"].try_number
         print(json.dumps(stats))
         return stats
 
@@ -82,20 +93,44 @@ def daily_mcf_ingest():
                     loaded += len(rows)
                 cur.execute(
                     """
-                    INSERT INTO raw.ingest_runs (snapshot_date, pages_fetched, jobs_fetched, api_total, seconds_taken)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO raw.ingest_runs (snapshot_date, pages_fetched, jobs_fetched, api_total, seconds_taken,
+                                                 fetch_attempts, retries_429)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (snapshot_date) DO UPDATE SET
                         pages_fetched = EXCLUDED.pages_fetched, jobs_fetched = EXCLUDED.jobs_fetched,
                         api_total = EXCLUDED.api_total, seconds_taken = EXCLUDED.seconds_taken,
+                        fetch_attempts = EXCLUDED.fetch_attempts, retries_429 = EXCLUDED.retries_429,
                         finished_at = now()
                     """,
-                    (ds, stats["pages_fetched"], stats["jobs_fetched"], stats["api_total"], stats["seconds_taken"]),
+                    (ds, stats["pages_fetched"], stats["jobs_fetched"], stats["api_total"], stats["seconds_taken"],
+                     stats.get("fetch_attempts"), stats.get("retries_429")),
                 )
         finally:
             conn.close()
         return loaded
 
-    load_raw(check_snapshot(fetch_snapshot()))
+    @task
+    def check_schema_drift(stats: dict) -> dict:
+        """Compare the file's JSON field paths with the last stored day (quality/snapshot_checks.py) and record
+        the verdict as raw_schema_drift in clean.dq_results. Warn only, and a separate task beside load_raw, so a
+        changed schema or a failure here can never stop the day's load. Reads the gz file, not the table, so it
+        does not wait for load_raw. About 22 s for 90,000 postings."""
+        if int(os.environ.get("MCF_MAX_PAGES", "0")) > 0:
+            raise AirflowSkipException("trial run: a few pages would make a misleading baseline")
+        conn = PostgresHook(postgres_conn_id="warehouse").get_conn()
+        try:
+            if not drift_tables_ready(conn):
+                raise AirflowSkipException("ops.schema_fields is missing: apply sql/init/11_ops_schema_fields.sql")
+            fields, read = field_stats(read_snapshot(Path(stats["path"])), limit=DRIFT_SAMPLE)
+            out = record_schema_drift(conn, stats["snapshot_date"], fields, read)
+        finally:
+            conn.close()
+        print(json.dumps(out))
+        return out
+
+    checked = check_snapshot(fetch_snapshot())
+    load_raw(checked)
+    check_schema_drift(checked)
 
 
 daily_mcf_ingest()

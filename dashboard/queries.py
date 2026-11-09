@@ -74,12 +74,38 @@ def filter_options():
 
 # --- trending skills ----------------------------------------------------------------------------
 
+def _run_tag_list(key: str) -> str:
+    """A tag list the latest finished weekly run used (metrics.run_log.thresholds: generic_skill_tags or
+    soft_skill_tags), lower-cased, so the daily tabs judge tags the way the weekly signals do. Empty before any run."""
+    return (f"ARRAY(SELECT lower(jsonb_array_elements_text(r.thresholds->'{key}')) FROM "
+            f"(SELECT thresholds FROM metrics.run_log WHERE status = 'ok' ORDER BY week_end_date DESC LIMIT 1) r)")
+
+
+# Per skill: is it a generic tag (left out of every skill list) and is it a trait or attitude (hidden when only
+# technical skills are shown). A skill counts as generic or soft only when every MCF tag behind it is.
+SKILL_KIND = f"""
+    tag_lists AS (SELECT {_run_tag_list('generic_skill_tags')} AS generic, {_run_tag_list('soft_skill_tags')} AS soft),
+    skill_kind AS (
+        SELECT m.skill_id,
+               bool_and(lower(d.mcf_skill_name) = ANY(t.generic)) AS is_generic,
+               bool_and(lower(d.mcf_skill_name) = ANY(t.soft))    AS is_soft
+        FROM mart.skill_map m
+        JOIN clean.dim_skill d USING (skill_key)
+        CROSS JOIN tag_lists t
+        GROUP BY m.skill_id
+    )"""
+
+
 @st.cache_data(ttl=TTL, show_spinner=False)
-def trending_skills(f: Filters, limit: int = 20, min_mentions: int = 20, min_prev_mentions: int = 20):
+def trending_skills(f: Filters, limit: int = 20, min_mentions: int = 20, min_prev_mentions: int = 20,
+                    technical_only: bool = False):
     """Top skills in the window by posting-days, with share of all postings in the slice and the
-    last-7-days vs previous-7-days change in that share."""
+    last-7-days vs previous-7-days change in that share (relative: (share now / share before - 1) * 100).
+    Generic tags are always left out; technical_only keeps SkillsFuture technical skills and unmapped tags that are
+    not traits or attitudes, as the weekly shortage and barrier lists do."""
     sql = f"""
-    WITH den AS (
+    WITH {SKILL_KIND},
+    den AS (
         SELECT COALESCE(sum(postings) FILTER (WHERE snapshot_date > {AS_OF} - %(window)s), 0) AS win,
                COALESCE(sum(postings) FILTER (WHERE snapshot_date > {AS_OF} - 7), 0) AS last7,
                COALESCE(sum(postings) FILTER (WHERE snapshot_date > {AS_OF} - 14
@@ -95,8 +121,11 @@ def trending_skills(f: Filters, limit: int = 20, min_mentions: int = 20, min_pre
                                                   AND s.snapshot_date <= {AS_OF} - 7), 0) AS prev7
         FROM mart.skill_slice_day s
         JOIN mart.skill k ON k.skill_id = s.skill_id
+        JOIN skill_kind kd ON kd.skill_id = s.skill_id
         WHERE s.snapshot_date > {AS_OF} - GREATEST(%(window)s, 14)
           AND {_slice('s')} AND {_skill_filter('k')}
+          AND NOT kd.is_generic
+          AND (NOT %(technical)s OR k.skill_type = 'tsc' OR (k.skill_type = 'unmapped' AND NOT kd.is_soft))
         GROUP BY s.skill_id
     )
     SELECT k.skill_id, k.skill_label, k.skill_type, k.is_emerging,
@@ -114,7 +143,7 @@ def trending_skills(f: Filters, limit: int = 20, min_mentions: int = 20, min_pre
     LIMIT %(limit)s
     """
     return run_query(sql, {**f.params(), "limit": limit, "min_mentions": min_mentions,
-                           "min_prev": min_prev_mentions})
+                           "min_prev": min_prev_mentions, "technical": bool(technical_only)})
 
 
 @st.cache_data(ttl=TTL, show_spinner=False)
@@ -345,44 +374,6 @@ def salary_model():
         conn.close()
 
 
-# --- hiring difficulty --------------------------------------------------------------------------
-
-@st.cache_data(ttl=TTL, show_spinner=False)
-def occupation_difficulty(f: Filters, min_posting_days: int = 100):
-    sql = f"""
-    SELECT ssoc_code, min(ssoc_title) AS ssoc_title, min(mom_group) AS mom_group,
-           sum(postings) AS posting_days,
-           sum(postings)::float8 / count(DISTINCT snapshot_date) AS avg_open_postings,
-           sum(applications_per_day) / NULLIF(sum(rated_postings), 0) AS applications_per_posting,
-           sum(views_per_day) / NULLIF(sum(rated_postings), 0)        AS views_per_posting,
-           sum(reposts)::float8 / NULLIF(sum(postings), 0)            AS repost_rate,
-           sum(avg_days_open * postings) / NULLIF(sum(postings), 0)   AS avg_days_open
-    FROM mart.occupation_day
-    WHERE snapshot_date > {AS_OF} - %(window)s AND {_occupation_slice()}
-    GROUP BY ssoc_code
-    HAVING sum(postings) >= %(min_n)s
-    ORDER BY posting_days DESC
-    """
-    return run_query(sql, {**f.params(), "min_n": min_posting_days})
-
-
-@st.cache_data(ttl=TTL, show_spinner=False)
-def skill_difficulty(f: Filters, min_posting_days: int = 100, limit: int = 40):
-    sql = f"""
-    SELECT k.skill_label, k.skill_type, sum(s.postings) AS posting_days,
-           sum(s.applications_per_day) / NULLIF(sum(s.rated_postings), 0) AS applications_per_posting,
-           sum(s.reposts)::float8 / NULLIF(sum(s.postings), 0)            AS repost_rate
-    FROM mart.skill_slice_day s
-    JOIN mart.skill k ON k.skill_id = s.skill_id
-    WHERE s.snapshot_date > {AS_OF} - %(window)s AND {_slice('s')} AND {_skill_filter('k')}
-    GROUP BY k.skill_label, k.skill_type
-    HAVING sum(s.postings) >= %(min_n)s
-    ORDER BY posting_days DESC
-    LIMIT %(limit)s
-    """
-    return run_query(sql, {**f.params(), "min_n": min_posting_days, "limit": limit})
-
-
 # --- career transitions -------------------------------------------------------------------------
 
 @st.cache_data(ttl=TTL, show_spinner=False)
@@ -406,8 +397,10 @@ def occupation_skill_profiles():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def ingest_runs(days: int = 30):
+    """One row per crawled day. fetch_attempts and retries_429 are NULL where not recorded (ops/ingest_retries.py)."""
     return run_query("""
-        SELECT snapshot_date, pages_fetched, jobs_fetched, api_total, seconds_taken, finished_at
+        SELECT snapshot_date, pages_fetched, jobs_fetched, api_total, seconds_taken, finished_at,
+               fetch_attempts, retries_429
         FROM raw.ingest_runs
         ORDER BY snapshot_date DESC
         LIMIT %(days)s
@@ -416,6 +409,8 @@ def ingest_runs(days: int = 30):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_steps(days: int = 14):
+    """Seconds per transform step of each day's latest run. The 'dag_run' row (the whole run) is left out: it
+    overlaps the steps and includes the sensor's wait for the day's crawl (up to 262,000 s on 25 to 27 Oct)."""
     return run_query("""
         WITH last_run AS (
             SELECT DISTINCT ON (snapshot_date) snapshot_date, run_id
@@ -426,6 +421,7 @@ def load_steps(days: int = 14):
         FROM clean.load_log l
         JOIN last_run r ON r.snapshot_date = l.snapshot_date AND r.run_id = l.run_id
         WHERE l.snapshot_date > (SELECT max(snapshot_date) FROM clean.load_log) - %(days)s
+          AND l.step <> 'dag_run'
         ORDER BY l.snapshot_date, l.started_at
     """, {"days": days})
 

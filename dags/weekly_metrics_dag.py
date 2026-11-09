@@ -9,6 +9,7 @@ wait_for_week_end_snapshot -> pick_snapshot ----+
                                                                      +-> build_competitiveness -----------+
                                                                      +-> build_skill_demand --------------+
                                                                      +-> build_skill_salary --------------+
+                                                                     +-> build_group_signals -------------+
 
 Runs every Tuesday at 14:00 Singapore time. Ingest (10:00) normally finishes by 10:45 and the transform
 soon after, but on 27 and 28 Oct ingest ran until 14:49 and 15:31. So wait_for_week_end_snapshot first
@@ -42,7 +43,7 @@ Design:
     backfilled ones included, compares with the latest MOM quarter available.
   - signals (metrics/): pick_snapshot resolves the week and its snapshot once and records them in
     metrics.run_log (week_end_date = the interval end's Singapore date, snapshot_date = the snapshot
-    used). build_posting_week stores the open postings of the week end, then the six signal tables build
+    used). build_posting_week stores the open postings of the week end, then the seven signal tables build
     in parallel: they read only metrics.posting_week and clean, never each other, so a failure reruns
     only that table. check_and_log runs range checks on the week's rows and fails the run on a 'fail'
     check (the rows stay for inspection, like the transform's data-quality step).
@@ -62,6 +63,7 @@ from airflow.exceptions import AirflowFailException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sensors.base import PokeReturnValue
 
+from common.alerts import TASK_ALERTS, on_dag_failure   # dags/common: failure and retry alerts
 from metrics.build_week import (SIGNAL_TABLES, build_table, finish_run_log, resolve_week, run_metric_checks,
                                 start_run_log)
 from quality.clean_checks import summarise
@@ -82,7 +84,8 @@ def _warehouse_conn():
     start_date=pendulum.datetime(2026, 10, 20, 14, tz=SGT),   # first run covers the week ending 27 Oct
     catchup=True,
     max_active_runs=1,
-    default_args={"retries": 2, "retry_delay": timedelta(minutes=10)},
+    default_args={"retries": 2, "retry_delay": timedelta(minutes=10), **TASK_ALERTS},
+    on_failure_callback=on_dag_failure,   # run-level failures, e.g. a timed-out run (dags/common/alerts.py)
     tags=["metrics", "mom"],
     doc_md=__doc__,
 )

@@ -10,11 +10,20 @@ x-airflow-env: &airflow-env
   AIRFLOW_CONN_WAREHOUSE: postgresql://${WAREHOUSE_USER}:${WAREHOUSE_PASSWORD}@warehouse:5432/${WAREHOUSE_DB}
   MCF_MAX_PAGES: ${MCF_MAX_PAGES:-0}
   MCF_LIVE_PAGES: ${MCF_LIVE_PAGES:-3}   # near-real-time feed: pages of 100 newest postings per 30-min poll
+  # Optional Telegram alerts (dags/common/alerts.py). Empty = only the ops.alert_log table. Set them in .env, never in git.
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
   PYTHONPATH: /opt/airflow
-  # The official image has no openpyxl (reference xlsx files) or rapidfuzz (skill matching). The image's
-  # entrypoint pip-installs this list at container start. Without it the transform DAG's load_reference
-  # task cannot read data/reference/*.xlsx and fuzzy matching falls back to difflib (different results).
-  _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-openpyxl>=3.1 rapidfuzz>=3.0 numpy>=1.26}
+  # No _PIP_ADDITIONAL_REQUIREMENTS any more: openpyxl and rapidfuzz are baked into our own image at build
+  # time, pinned (docker/airflow/Dockerfile, docs/docker-images.md), instead of pip-installed at every start.
+
+# Our Airflow image. Bump the -rN tag whenever docker/airflow/ changes: compose then sees a missing image and
+# builds it on the next `docker compose up -d`, so no laptop keeps running a stale one.
+x-airflow-image: &airflow-image
+  image: is3107-airflow:2.10.5-r1
+  build:
+    context: .
+    dockerfile: docker/airflow/Dockerfile
 
 x-airflow-volumes: &airflow-volumes
   - ./dags:/opt/airflow/dags
@@ -57,7 +66,7 @@ services:
       retries: 10
 
   airflow-init:
-    image: apache/airflow:2.10.5
+    <<: *airflow-image
     user: "${AIRFLOW_UID:-50000}:0"
     environment: *airflow-env
     volumes: *airflow-volumes
@@ -73,7 +82,7 @@ services:
           --firstname Admin --lastname User --email admin@example.com || true
 
   airflow-webserver:
-    image: apache/airflow:2.10.5
+    <<: *airflow-image
     user: "${AIRFLOW_UID:-50000}:0"
     environment: *airflow-env
     volumes: *airflow-volumes
@@ -86,7 +95,7 @@ services:
     restart: unless-stopped
 
   airflow-scheduler:
-    image: apache/airflow:2.10.5
+    <<: *airflow-image
     user: "${AIRFLOW_UID:-50000}:0"
     environment: *airflow-env
     volumes: *airflow-volumes
@@ -99,6 +108,7 @@ services:
     restart: unless-stopped
 
   dashboard:
+    image: is3107-dashboard:r1      # bump when dashboard/Dockerfile or its requirements change
     build:
       context: .
       dockerfile: dashboard/Dockerfile
@@ -117,6 +127,19 @@ services:
       warehouse:
         condition: service_healthy
     restart: unless-stopped
+
+  # One-off PySpark job on the Parquet lake (spark/skill_demand.py, docs/lake-and-spark.md). Under a profile, so
+  # `docker compose up -d` never starts it. Run it with:  docker compose --profile spark run --rm spark
+  # Local mode, 2 cores, 1 GB driver: about 1.5 GB in all while it runs, then the container is removed.
+  spark:
+    image: apache/spark:3.5.7-python3      # pinned; about 540 MB to pull once
+    profiles: ["spark"]
+    volumes:
+      - ./spark:/opt/spark-jobs:ro
+      - ./data/lake:/opt/lake
+    mem_limit: 2g
+    command: ["/opt/spark/bin/spark-submit", "--master", "local[2]", "--driver-memory", "1g",
+              "/opt/spark-jobs/skill_demand.py", "--lake", "/opt/lake"]
 
 volumes:
   airflow-db:
