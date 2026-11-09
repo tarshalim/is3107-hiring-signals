@@ -42,10 +42,10 @@ FLAG_LABELS = {
     "junior_2plus_years": "Junior Executive asking 2+ years",
     "reposted_many_apps": "Reposted despite many applicants",
 }
-# the two experience asks, in the order the tab shows them: entry level leads (little extra pay, the clearest
-# unrealistic ask), Junior Executive second. reposted_many_apps is shown as a minor signal below them
+# the two experience asks, in the order the tab shows them: entry level leads (no sign of a pay premium, the
+# clearest unrealistic ask), Junior Executive second. reposted_many_apps is shown as a minor signal below them
 EXPERIENCE_FLAGS = ("entry_level_2plus_years", "junior_2plus_years")
-PAY_GAP_SMALL = 0.05        # within 5% of the other postings' median: little extra pay
+PAY_GAP_SMALL = 0.05        # within 5% of the other postings' median: no sign of a pay premium
 PAY_GAP_LARGE = 0.10        # 10% or more above: the role is paid like a more senior one
 
 
@@ -85,11 +85,11 @@ def pay_gap(flagged, other) -> float | None:
 
 def experience_ask_reading(gap) -> str:
     """How to read postings asking 2+ years at a junior level, from their pay against the others at that level:
-    little extra pay is an unrealistic ask, clearly more pay a more senior role under a junior label."""
+    no sign of a pay premium is an unrealistic ask, clearly more pay a more senior role under a junior label."""
     if gap is None:
         return ""
     if abs(gap) < PAY_GAP_SMALL:
-        return "little extra pay for the experience asked, the clearest unrealistic ask"
+        return "no sign of a pay premium for the experience asked, the clearest unrealistic ask"
     if gap >= PAY_GAP_LARGE:
         return "paid like more senior roles, so more likely mid-level jobs labelled junior than an unrealistic ask"
     return ""
@@ -147,7 +147,8 @@ def week_label(week) -> str:
 def week_caption(week) -> str:
     start, end, snap = (pd.Timestamp(week[c]) for c in ("week_start_date", "week_end_date", "snapshot_date"))
     text = (f"{start:%a} {start.day} {start:%b} to {end:%a} {end.day} {end:%b}, read from the {snap.day} {snap:%b} "
-            f"snapshot: {int(week['pool_postings']):,} open postings.")
+            f"snapshot: {int(week['pool_postings']):,} open postings in the week's pool (includes carried-forward "
+            "postings).")
     if not week.get("snapshot_is_week_end", True):
         text += " The week's Tuesday snapshot was missing, so an earlier day was used."
     note = partial_week(week)
@@ -344,7 +345,7 @@ def demand_verdict(row) -> dict:
     if not missing(row.get("demand_share_week_before")):
         delta = points(row["demand_share"] - row["demand_share_week_before"])
     return {"value": pct(row["demand_share"]), "delta": delta,
-            "caption": f"of new postings in the week of {week.day} {week:%b} ask for it "
+            "caption": f"of new postings by posting week (the week of {week.day} {week:%b}) ask for it "
                        f"({int(row['demand_new_postings']):,} postings)."}
 
 
@@ -358,7 +359,8 @@ def pay_verdict(row, t: dict) -> dict:
     employers = row.get("salary_companies")
     who = f"its {int(employers):,} employers" if not missing(employers) and employers else "its employers"
     return {"value": money(row["salary_mid_median"]), "delta": None,
-            "caption": f"median a month across {who} (each counted once), {times(row['salary_vs_overall'])} "
+            "caption": f"employer-weighted median (weekly) a month, across {who} (each counted once), "
+                       f"{times(row['salary_vs_overall'])} "
                        f"the market's. The middle half of employers pay "
                        f"{money(row['salary_mid_p25'])} to {money(row['salary_mid_p75'])}."}
 

@@ -20,7 +20,7 @@ the snapshot the week was read from. The daily filters below it apply only to th
 | Which cause shows up where? | A grid: one row per job category (500+ postings) or SSOC major group, one column per signal (few applicants, shortage, barrier, entry level asking 2+ years). The number is the group's value; the colour is how many times the market it is, turned so red always points to hard to fill, blue the opposite, grey about the same (capped at 4x). Under each value, the postings it rests on; a cell on fewer than 100 postings is left blank with "too few" in muted text and the postings under it, outside the colour scale and with its own legend entry (on 3 Nov only four entry-level cells, e.g. Personal Care / Beauty's 42). Rows with the fewest applicants first. Hover: the cell's base, postings, agency share, median pay | `group_signals`, `competitiveness` |
 | 1. Shortage | Top 15 skills by lift, bar text = shortage postings and employers, dark bar = also listed last week, light = new this week; every listed skill in a table | `skill_signals` (from `shortage_skill`) |
 | 2. Barrier | Top 15 skills the run flagged (`is_barrier`), same encoding | `skill_signals` (from `barrier_skill`) |
-| 3. Unrealistic ask | Leads with entry level asking 2+ years (6.3% on 3 Nov, +1% pay: the clearest unrealistic ask), then Junior Executive (47%, but +21% pay: more likely mid-level roles labelled junior); each with its share, change since last week, pay against other postings and that reading of the pay gap. By job category, share bars next to a pay comparison. Below, "reposted despite many applicants" as one line: a minor signal with its share of direct employers' postings | `unrealistic_requirements` |
+| 3. Unrealistic ask | Leads with entry level asking 2+ years (6.3% on 3 Nov, +1% pay, so no sign of a pay premium: the clearest unrealistic ask; the caption adds that one agency posted about a third of them and that direct employers alone are at 5.0%), then Junior Executive (47%, but +21% pay: more likely mid-level roles labelled junior); each with its share, change since last week, pay against other postings and that reading of the pay gap. By job category, share bars next to a pay comparison. Below, "reposted despite many applicants" as one line: a minor signal with its share of direct employers' postings | `unrealistic_requirements` |
 | 4. Competition | Applications per posting per 24 hours by SSOC major group (30+ postings) and by occupation (fewest or most, minimum-postings slider); last week as a black tick | `competitiveness` |
 | Skill lookup | One skill, every signal: demand share in the latest fully observed posting week, pay band and premium, shortage, barrier, competition, a one-line verdict, and this week against last week. Opens on Quantity Surveying (the construction cost cluster, the strongest shortage finding) when the week has it | `skill_signals` |
 | Market check | MCF share of postings against MOM share of vacancies by group (3 groups, or PME and non-PME), gap written on the chart, one line on what it means for the signals, and a table with MOM's 1- and 5-year change and applications per posting | `mcf_vs_mom_share`, `competitiveness` (`mom_group`) |
@@ -80,9 +80,21 @@ Tests: `tests/test_dashboard_signals.py` (logic, and offline checks that the vie
 `WAREHOUSE_TEST_DSN`: three hand-made weeks, one failed, checked against hand-worked values, then the whole app
 rendered with Streamlit AppTest).
 
+## What changed on 9 Nov (wording only, from the 8 Nov critical review)
+
+- Entry level reads "with no sign of a pay premium", not "for the same pay": the +1% gap has a 95% interval of
+  −15% to +17%. Its caption adds that one agency posted about a third of these postings and that the rate is
+  5.0% for direct employers only (3 Nov).
+- Two totals for one week are labelled apart: Market check counts MCF postings on the snapshot day, the weekly
+  signal tabs count open postings in the week's pool (which includes carried-forward postings).
+- Two salaries and two demand measures are labelled apart: the daily Salary tab shows the median per posting
+  (daily), Skill lookup the employer-weighted median (weekly); Trending compares the last 7 days against the 7
+  before, Skill lookup's demand counts new postings by posting week.
+- Shortage: a caption notes that Spa rests on 26 shortage postings, just over the minimum of 25 (3 Nov).
+
 ## What changed on 8 Nov
 
-- **Unrealistic ask leads with entry level** asking 2+ years (little extra pay), Junior Executive second with
+- **Unrealistic ask leads with entry level** asking 2+ years (no sign of a pay premium), Junior Executive second with
   the note that it pays 21% more. The tile at the top follows the same order.
 - **Reposted despite many applicants** counts direct employers only, as shortage does, and is shown as a minor
   signal with its share.

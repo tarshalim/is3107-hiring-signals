@@ -265,6 +265,11 @@ def _shortage(rows, labels: dict, t):
                     width="stretch")
     st.caption("Lift = shortage postings / direct employers' postings with the skill, divided by the same share over "
                "all direct employers' postings.")
+    spa = rows[rows["skill_name"] == "Spa"]
+    if not spa.empty:
+        n, low = int(spa["shortage_postings"].iloc[0]), int(t["shortage_min_flagged"])
+        st.caption(f"Spa rests on {n} shortage postings"
+                   + (f", just over the minimum of {low}." if n < low * 1.25 else f" (minimum {low})."))
     with st.expander(f"All {len(rows)} listed shortage skills"):
         _table(rows, labels, {"shortage_lift": "Lift", "shortage_postings": "Shortage postings",
                               "shortage_base_postings": "Direct employers' postings",
@@ -294,8 +299,13 @@ def _barrier(rows, labels: dict, t):
 
 # --- unrealistic asks -----------------------------------------------------------------------------
 
+# from the 8 Nov critical review (docs/private/critical-review.md, claim 12): not in the metrics tables, which keep
+# agencies in this flag, so stated with its week
+ENTRY_AGENCY_NOTE = ("On 3 Nov one employment agency posted about a third of these postings; for direct employers "
+                     "only the rate was 5.0%.")
+
 def _unrealistic(unreal, t):
-    st.markdown("#### 3. Unrealistic ask: entry-level jobs asking for experience")
+    st.markdown("#### 3. Unrealistic ask: entry-level jobs asking for experience, with no sign of a pay premium")
     if unreal.empty:
         st.info("No unrealistic-requirement rows this week.")
         return
@@ -313,7 +323,8 @@ def _unrealistic(unreal, t):
             gap = logic.pay_gap(row["flagged_salary_mid_median"], row["other_salary_mid_median"])
             reading = logic.experience_ask_reading(gap)
             st.caption(f"{int(row['flagged_postings']):,} of {int(row['base_postings']):,} postings. They pay "
-                       f"{_gap_text(row)}" + (f": {reading}." if reading else "."))
+                       f"{_gap_text(row)}" + (f": {reading}." if reading else ".")
+                       + (f" {ENTRY_AGENCY_NOTE}" if flag == "entry_level_2plus_years" else ""))
 
     flag = st.radio("By job category", list(logic.EXPERIENCE_FLAGS), format_func=logic.FLAG_LABELS.get,
                     horizontal=True, key="signals_flag")

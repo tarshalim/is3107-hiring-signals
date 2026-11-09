@@ -6,7 +6,7 @@ from dashboard import queries
 from dashboard.filters import SKILL_TYPE_LABELS, Filters
 
 
-WOW = "WoW change (relative %)"
+WOW = "Last 7 days against the 7 before (relative %)"
 
 
 def render(f: Filters, days_of_history: int):
@@ -36,7 +36,7 @@ def render(f: Filters, days_of_history: int):
     left.plotly_chart(chart, width="stretch")
 
     with right:
-        st.markdown("**Week-over-week change in share (relative %, not points)**")
+        st.markdown("**Change in share, last 7 days against the 7 before (relative %, not points)**")
         if days_of_history < 14:
             st.caption("Needs 14 days of history.")
         else:

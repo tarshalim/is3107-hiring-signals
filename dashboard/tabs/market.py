@@ -14,7 +14,7 @@ def _chart(rows):
     labels = [logic.wrap_label(s, 28) for s in rows["group_title"]]
     fig = go.Figure()
     fig.add_trace(go.Bar(x=labels, y=rows["mcf_share_pct"], name="MyCareersFuture postings", marker_color=MCF_COLOR,
-                         hovertemplate="%{x}<br>MCF %{y:.1f}% of open postings<extra></extra>"))
+                         hovertemplate="%{x}<br>MCF %{y:.1f}% of postings on the snapshot day<extra></extra>"))
     fig.add_trace(go.Bar(x=labels, y=rows["mom_share_pct"], name="MOM job vacancies", marker_color=MOM_COLOR,
                          hovertemplate="%{x}<br>MOM %{y:.1f}% of vacancies<extra></extra>"))
     top = rows[["mcf_share_pct", "mom_share_pct"]].max(axis=1)
@@ -35,13 +35,13 @@ def _table(rows, comp):
     if not comp.empty:
         apps = comp[comp["group_type"] == "mom_group"].set_index("group_key")["apps_per_posting_day_24h"]
         table["apps"] = table["mom_group"].map(apps)
-    cols = {"group_title": "Group", "mcf_postings": "MCF postings", "mcf_share_pct": "MCF %",
+    cols = {"group_title": "Group", "mcf_postings": "MCF postings on the snapshot day", "mcf_share_pct": "MCF %",
             "mom_vacancies": "MOM vacancies", "mom_share_pct": "MOM %", "share_gap_pp": "Gap (pts)",
             "share_gap_pp_prev_week": "Gap last week", "mcf_vacancy_share_pct": "MCF % by vacancies",
             "mom_yoy_pct": "MOM 1-year change %", "mom_5y_pct": "MOM 5-year change %",
             "apps": "Applications per posting per day"}
     one = st.column_config.NumberColumn(format="%.1f")
-    config = {"MCF postings": st.column_config.NumberColumn(format="localized"),
+    config = {"MCF postings on the snapshot day": st.column_config.NumberColumn(format="localized"),
               "MOM vacancies": st.column_config.NumberColumn(format="localized"),
               "Applications per posting per day": st.column_config.NumberColumn(format="%.2f"),
               **{name: one for name in ("MCF %", "MOM %", "Gap (pts)", "Gap last week", "MCF % by vacancies",
@@ -60,7 +60,8 @@ def render(week):
                 "it.")
         return
     snap = pd.Timestamp(market["mcf_snapshot_date"].iloc[0])
-    st.caption(f"Share of MyCareersFuture open postings on {snap.day} {snap:%b} against share of MOM job vacancies "
+    st.caption(f"Share of MyCareersFuture postings on the snapshot day ({snap.day} {snap:%b}) against share of MOM "
+               "job vacancies "
                f"in {market['mom_quarter'].dropna().iloc[0] if market['mom_quarter'].notna().any() else 'n/a'} "
                "(the latest quarter MOM has published), by occupation group. Gap = MCF minus MOM, in points.")
     split = st.radio("Groups", list(SPLITS), format_func=SPLITS.get, horizontal=True, key="market_split")
