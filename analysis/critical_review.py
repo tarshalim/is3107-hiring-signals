@@ -6,7 +6,9 @@ inside the dashboard container (which has no scipy: rank correlations are Pearso
     PowerShell:  Get-Content analysis/critical_review.py -Raw | docker compose exec -T dashboard python - full
     bash:        docker compose exec -T dashboard python - full < analysis/critical_review.py
 
-Arguments: none runs sections D to K; "full" adds A to C (the slow employer-clustered bootstraps).
+Arguments: none runs sections D to L; "full" adds A to C (the slow employer-clustered bootstraps); "L" runs only
+section L, the threshold sensitivity of the barrier and shortage lists (added 8 Nov, written up in
+docs/private/barrier-sensitivity-8Nov.md).
 
 The numbers the report cites are the 8 Nov output, saved in docs/private/critical-review-output-8Nov.txt. A rerun
 reads the warehouse as it is then, so after a week is rebuilt (or once the 10 Nov week exists) the values will
@@ -28,7 +30,7 @@ COMMISSION = ["REZOLUTE GLOBALZ", "STRIVE MARKETING", "NXTLVL", "WAVEWORKS", "FO
               "ALTIUS ORG", "THRIVE ORGANIZATION", "YVOLVE", "ELEVATEH"]
 
 pw = run_query("""
-SELECT pw.week_end_date::text AS w, pw.job_uuid, pw.company_name, pw.ssoc_code, left(pw.ssoc_code,2) AS ssoc2,
+SELECT pw.week_end_date::text AS w, pw.job_uuid, pw.job_key, pw.company_name, pw.ssoc_code, left(pw.ssoc_code,2) AS ssoc2,
        pw.ssoc_major_group AS maj, pw.mom_group, pw.category, pw.position_level, pw.min_years_exp, pw.exp_out_of_range,
        pw.salary_mid, pw.salary_usable, pw.views_total, pw.applications_total, pw.repost_count,
        pw.days_since_original_posting AS age, pw.apps_per_day_since_posting AS apd, pw.views_per_day_since_posting AS vpd,
@@ -87,6 +89,139 @@ def wilson(k, n, z=1.96):
     h = z * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / den
     return c - h, c + h
 
+
+# section L: skills whose listing is followed across threshold variants
+BARRIER_WATCH = ["Construction Drawings", "Site Inspections", "Structural Engineering", "Construction Management",
+                 "SketchUp", "BIM (Building Information Modeling)"]
+SHORTAGE_WATCH = ["Quantity Surveying", "Tendering", "Cost Control", "Technical Drawing", "Civil Engineering"]
+
+
+def md_table(header, rows):
+    """Print a Markdown table (tabulate is not in the container)."""
+    print("| " + " | ".join(header) + " |")
+    print("|" + "---|" * len(header))
+    for r in rows:
+        print("| " + " | ".join(str(c) for c in r) + " |")
+
+
+def watch_cell(lifts, listed, name):
+    """'yes 2.10' / 'no 1.42' for a watched skill, '-' when it is not among the skills tested at all."""
+    if name not in lifts.index:
+        return "-"
+    lift = lifts[name]
+    return f"{'yes' if name in listed else 'no'} {lift:.2f}" if pd.notna(lift) else "no"
+
+
+def section_l():
+    """L. Threshold sensitivity: rebuild the barrier and shortage lists with other thresholds, read only.
+
+    The rules are those of metrics/build_week.py (BARRIER_POSTING_SQL, BARRIER_SQL, SHORTAGE_SQL); every threshold
+    not varied here is read from the week's metrics.run_log row. The base variant must give back the stored lists
+    exactly, which is checked and printed first."""
+    print("\n=== L. Threshold sensitivity of the barrier and shortage lists ===")
+    for w in WEEKS:
+        th = run_query("SELECT thresholds FROM metrics.run_log WHERE week_end_date = %(w)s", {"w": w}).thresholds.iloc[0]
+        if isinstance(th, str):
+            import json
+            th = json.loads(th)
+        d = pw[pw.w == w].reset_index(drop=True)
+        d["grp"] = d.barrier_group.fillna("none")
+        for c in ["vpd", "views_total", "applications_total", "repost_count"]:
+            d[c] = d[c].astype(float)
+        # every open posting x skill, without the generic tags (as _POOL_SKILL)
+        sk = run_query("""
+            SELECT DISTINCT pw.job_key, COALESCE(s.ssg_skill_id, s.mcf_skill_uuid) AS skill_ref
+            FROM metrics.posting_week pw
+            JOIN clean.bridge_job_skill b ON b.job_key = pw.job_key
+            JOIN clean.dim_skill s ON s.skill_key = b.skill_key
+            WHERE pw.week_end_date = %(w)s AND lower(s.mcf_skill_name) <> ALL(%(g)s::text[])""",
+                       {"w": w, "g": list(th["generic_skill_tags"])})
+        sk["i"] = sk.job_key.map(pd.Series(d.index, index=d.job_key)).astype(int)
+        sk["skill"] = sk.skill_ref.map(names.set_index("skill_ref").skill_name)
+        sk["company"] = d.company_name.to_numpy()[sk.i]
+        stored = {kind: set(run_query(f"SELECT skill_ref FROM metrics.{kind}_skill WHERE week_end_date = %(w)s"
+                                      + (" AND is_barrier" if kind == "barrier" else ""), {"w": w}).skill_ref)
+                  for kind in ["barrier", "shortage"]}
+
+        # --- barrier: parts that do not depend on the varied thresholds
+        rate = d.applications_total / d.views_total.where(d.views_total > 0)
+        g = d.groupby("grp")
+        grp_rate = g.applications_total.transform("sum") / g.views_total.transform("sum").where(lambda v: v > 0)
+        overall_rate = d.applications_total.sum() / d.views_total.sum()
+        per = sk.assign(views=d.views_total.to_numpy()[sk.i], apps=d.applications_total.to_numpy()[sk.i]) \
+                .groupby("skill_ref").agg(n=("i", "size"), comp=("company", "nunique"), views=("views", "sum"),
+                                          apps=("apps", "sum"))
+        per["rvo"] = per.apps / per.views.where(per.views > 0) / overall_rate
+        b_pool = sk[sk.skill_ref.isin(per[(per.n >= th["skill_min_postings"]) & (per.comp >= th["min_companies"])].index)]
+
+        def barrier_variant(pctl, ratio, min_lift):
+            high = g.vpd.transform(lambda s: s.quantile(pctl))      # pandas' default quantile = percentile_cont
+            flag = ((d.vpd >= high) & (rate <= ratio * grp_rate)).to_numpy()
+            gshare = pd.Series(flag, index=d.index).groupby(d.grp).transform("mean").to_numpy()
+            x = b_pool.assign(f=flag[b_pool.i], e=gshare[b_pool.i])
+            agg = x.groupby("skill_ref").agg(skill=("skill", "first"), n=("f", "size"), k=("f", "sum"), e=("e", "mean"))
+            fl = x[x.f]
+            agg["kcomp"] = fl.groupby("skill_ref").company.nunique()
+            agg["top"] = fl.groupby(["skill_ref", "company"]).size().groupby(level=0).max()
+            agg["lift"] = agg.k / agg.n / agg.e.where(agg.e > 0)
+            agg["rvo"] = per.rvo
+            ok = ((agg.lift >= min_lift) & (agg.k >= th["barrier_min_flagged"]) & (agg.kcomp >= th["min_companies"])
+                  & (agg.top / agg.k <= th["max_top_company_share"]) & (agg.rvo < th["barrier_max_rate_vs_overall"]))
+            return agg, set(agg.index[ok])
+
+        # --- shortage: direct employers only
+        direct = ~d.agency.to_numpy()
+        s_pool = sk[direct[sk.i]]
+        s_n = s_pool.groupby("skill_ref").size()
+        s_pool = s_pool[s_pool.skill_ref.isin(s_n[s_n >= th["skill_min_postings"]].index)]
+
+        def shortage_variant(min_reposts, max_apps, min_lift):
+            flag = ((d.repost_count >= min_reposts) & (d.applications_total <= max_apps)).to_numpy()
+            overall = flag[direct].mean()
+            x = s_pool.assign(f=flag[s_pool.i])
+            agg = x.groupby("skill_ref").agg(skill=("skill", "first"), n=("f", "size"), k=("f", "sum"))
+            fl = x[x.f]
+            agg["kcomp"] = fl.groupby("skill_ref").company.nunique()
+            agg["top"] = fl.groupby(["skill_ref", "company"]).size().groupby(level=0).max()
+            agg["lift"] = agg.k / agg.n / overall
+            ok = ((agg.lift >= min_lift) & (agg.k >= th["shortage_min_flagged"]) & (agg.kcomp >= th["min_companies"])
+                  & (agg.top / agg.k <= th["max_top_company_share"]))
+            return agg, set(agg.index[ok])
+
+        base_b = barrier_variant(th["barrier_views_percentile"], th["barrier_max_rate_ratio"], th["barrier_min_lift"])[1]
+        base_s = shortage_variant(th["shortage_min_reposts"], th["shortage_max_applications"], th["shortage_min_lift"])[1]
+        print(f"\nWeek {w}: base check, recomputed vs stored list: barrier {len(base_b)} vs {len(stored['barrier'])}, "
+              f"identical={base_b == stored['barrier']}; shortage {len(base_s)} vs {len(stored['shortage'])}, "
+              f"identical={base_s == stored['shortage']}")
+
+        for kind, axes, labels, watch, fn in [
+            ("barrier", [(0.70, 0.75, 0.80), (0.7, 0.8, 0.9)], ("views P", "apply-rate ratio"), BARRIER_WATCH, barrier_variant),
+            ("shortage", [(1, 2), (1, 2, 3)], ("reposts >=", "applications <="), SHORTAGE_WATCH, shortage_variant),
+        ]:
+            counts, watch_rows = [], []
+            stays = {nm: 0 for nm in watch}
+            for a in axes[0]:
+                for r in axes[1]:
+                    row = [f"P{round(a * 100)}" if kind == "barrier" else a, r]
+                    for lift in (1.3, 1.5, 2.0):
+                        agg, listed = fn(a, r, lift)
+                        lifts = agg.groupby("skill").lift.max()
+                        names_listed = set(agg.loc[list(listed), "skill"])
+                        row.append(len(listed))
+                        watch_rows.append(row[:2] + [lift] + [watch_cell(lifts, names_listed, nm) for nm in watch])
+                        for nm in watch:
+                            stays[nm] += nm in names_listed
+                    counts.append(row)
+            print(f"\n{kind}, week {w}: skills listed (columns: minimum lift)")
+            md_table([labels[0], labels[1], "lift 1.3", "lift 1.5", "lift 2.0"], counts)
+            print(f"\n{kind}, week {w}: watched skills, listed or not, with their lift")
+            md_table([labels[0], labels[1], "lift"] + watch, watch_rows)
+            print(f"\n{kind}, week {w}: variants (of {len(watch_rows)}) in which each watched skill is listed: {stays}")
+
+
+if "L" in sys.argv:
+    section_l()
+    sys.exit()
 
 WEEKS_ABC = WEEKS if "full" in sys.argv else []
 print("\n=== A. Headline shares: estimate, Wilson 95% CI, employer-clustered bootstrap 95% CI ===")
@@ -295,4 +430,6 @@ for t, extra in [("shortage_skill", ""), ("barrier_skill", "")]:
                            FROM metrics.{t} GROUP BY 1 ORDER BY 1""").to_dict("records"))
 print("barrier flagged:", run_query("""SELECT week_end_date::text w, count(*) FILTER (WHERE is_barrier) flagged,
        count(*) FILTER (WHERE is_barrier AND is_casl) casl FROM metrics.barrier_skill GROUP BY 1""").to_dict("records"))
+
+section_l()
 
