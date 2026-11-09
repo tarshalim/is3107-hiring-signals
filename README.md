@@ -121,7 +121,7 @@ the sidebar (`docs/dashboard-signals.md`; apply `sql/init/10_dashboard_signals.s
 - **Skill lookup**: every weekly signal for one skill (demand, pay, shortage, barrier, competition).
 - **Market check**: MCF share of postings against MOM share of vacancies, and what the gap means for the signals.
 
-Seven daily tabs follow, all filterable by window (7/14/30 days), occupation group, SSOC major group, job
+Six daily tabs follow, all filterable by window (7/14/30 days), occupation group, SSOC major group, job
 category, skill type and emerging skills:
 
 - **Trending skills**: top 20 skills by share of postings, last-7-days vs previous-7-days change in share, daily trend.
@@ -161,7 +161,7 @@ branches that read the same week and the same snapshot:
 
 ```
 refresh_mom_stats -> compare_mcf_with_mom
-pick_snapshot -> build_posting_week -> 6 signal tables in parallel -> check_and_log
+pick_snapshot -> build_posting_week -> 7 signal tables in parallel -> check_and_log
 ```
 
 - **refresh_mom_stats** downloads MOM's "Number of Job Vacancy by Occupation - Quarterly" from data.gov.sg
@@ -171,9 +171,10 @@ pick_snapshot -> build_posting_week -> 6 signal tables in parallel -> check_and_
   the latest snapshot of the run's week vs MOM's share of vacancies in the latest quarter, MOM's 1-year and
   5-year change, and a `disagrees` flag when the shares differ by 10 percentage points or more.
   `metrics.mom_vacancy_trend` is the long MOM series for the trend chart.
-- **pick_snapshot** → **build_posting_week** → six signal tables → **check_and_log** (`metrics/`) fill the tables of
+- **pick_snapshot** → **build_posting_week** → seven signal tables → **check_and_log** (`metrics/`) fill the tables of
   `sql/init/05_metrics_signals.sql` from the open postings of the week end (`metrics.posting_week`): barrier
-  skills, skill shortages, unrealistic requirements, competitiveness, skill demand and skill salary.
+  skills, skill shortages, unrealistic requirements, competitiveness, skill demand, skill salary and group
+  signals (the summary grid's shares per job category and SSOC major group).
   `metrics.run_log` records the week (`week_end_date`, the interval's last day), the snapshot used and the checks.
   `metrics.mcf_vs_mom_share` above is their MOM validation. Same steps without Airflow:
   `python -m metrics.run --week-ending 2026-11-03`. Table meanings, thresholds, validation: `docs/weekly-metrics.md`.
@@ -206,7 +207,7 @@ Without Airflow: `python -m transform.mom_vacancies` (or `--skip-download` to re
 
 ## Extra data (`ext` schema)
 
-Ten daily snapshots are a short window, so `sql/init/04_ext_schema.sql` adds three sources that widen it
+Sixteen daily snapshots (24 Oct to 8 Nov 2026) are a short window, so `sql/init/04_ext_schema.sql` adds three sources that widen it
 (details, licences, row counts and findings: `docs/extra-data.md`):
 
 - **2019 MyCareersFuture crawl** (Kaggle, 20,296 postings) for "2019 vs now" on skills and pay

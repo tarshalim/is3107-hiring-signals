@@ -12,17 +12,17 @@ only filtered and lined up with the week before. All SQL is parameterised and ca
 ## What was added
 
 **Week selector** (sidebar, "Weekly signals"): the finished weeks from `metrics.signal_weeks`, newest first, with
-the snapshot the week was read from. The daily filters below it apply only to the seven daily tabs.
+the snapshot the week was read from. The daily filters below it apply only to the six daily tabs.
 
 | Tab, section | What it shows | Reads |
 |---|---|---|
 | Hiring signals, top | Four tiles, one per signal: share of shortage postings and the top shortage skills, number of barrier skills and the strongest, entry-level postings asking 2+ years with their pay gap (Junior Executive second, with its higher pay), the gap in applications per posting between occupation groups. One caution line from the MOM comparison | `skill_signals`, `unrealistic_requirements`, `competitiveness`, `mcf_vs_mom_share` |
-| Which cause shows up where? | A grid: one row per job category (500+ postings) or SSOC major group, one column per signal (few applicants, shortage, barrier, entry level asking 2+ years). The number is the group's value; the colour is how many times the market it is, turned so red always points to hard to fill, blue the opposite, grey about the same (capped at 4x). Under each value, the postings it rests on; a cell on fewer than 100 postings is flat grey with muted text, outside the colour scale (on 3 Nov only four entry-level cells, e.g. Personal Care / Beauty's 42). Rows with the fewest applicants first. Hover: the cell's base, postings, agency share, median pay | `group_signals`, `competitiveness` |
+| Which cause shows up where? | A grid: one row per job category (500+ postings) or SSOC major group, one column per signal (few applicants, shortage, barrier, entry level asking 2+ years). The number is the group's value; the colour is how many times the market it is, turned so red always points to hard to fill, blue the opposite, grey about the same (capped at 4x). Under each value, the postings it rests on; a cell on fewer than 100 postings is left blank with "too few" in muted text and the postings under it, outside the colour scale and with its own legend entry (on 3 Nov only four entry-level cells, e.g. Personal Care / Beauty's 42). Rows with the fewest applicants first. Hover: the cell's base, postings, agency share, median pay | `group_signals`, `competitiveness` |
 | 1. Shortage | Top 15 skills by lift, bar text = shortage postings and employers, dark bar = also listed last week, light = new this week; every listed skill in a table | `skill_signals` (from `shortage_skill`) |
 | 2. Barrier | Top 15 skills the run flagged (`is_barrier`), same encoding | `skill_signals` (from `barrier_skill`) |
 | 3. Unrealistic ask | Leads with entry level asking 2+ years (6.3% on 3 Nov, +1% pay: the clearest unrealistic ask), then Junior Executive (47%, but +21% pay: more likely mid-level roles labelled junior); each with its share, change since last week, pay against other postings and that reading of the pay gap. By job category, share bars next to a pay comparison. Below, "reposted despite many applicants" as one line: a minor signal with its share of direct employers' postings | `unrealistic_requirements` |
 | 4. Competition | Applications per posting per 24 hours by SSOC major group (30+ postings) and by occupation (fewest or most, minimum-postings slider); last week as a black tick | `competitiveness` |
-| Skill lookup | One skill, every signal: demand share in the latest fully observed posting week, pay band and premium, shortage, barrier, competition, a one-line verdict, and this week against last week. Opens on the most common skill of the shortage chart | `skill_signals` |
+| Skill lookup | One skill, every signal: demand share in the latest fully observed posting week, pay band and premium, shortage, barrier, competition, a one-line verdict, and this week against last week. Opens on Quantity Surveying (the construction cost cluster, the strongest shortage finding) when the week has it | `skill_signals` |
 | Market check | MCF share of postings against MOM share of vacancies by group (3 groups, or PME and non-PME), gap written on the chart, one line on what it means for the signals, and a table with MOM's 1- and 5-year change and applications per posting | `mcf_vs_mom_share`, `competitiveness` (`mom_group`) |
 
 **Views** (`sql/init/10_dashboard_signals.sql`, plain views, no new data, nothing to refresh):
@@ -66,11 +66,14 @@ depend on each other. Never `docker compose down -v`.
 ## Tested
 
 6 Nov 2026 on Brian's laptop, in a throwaway Postgres 16 container: every `sql/init` file applied, the real
-exports of the weeks ending 27 Oct and 3 Nov loaded into `metrics` (`clean` and `mart` empty). The tabs show the
-numbers of `findings-6Nov.md`: 2.5% shortage postings, 67 of 74 shortage skills listed both weeks and 53 of 81
-barrier skills, General Ledger 3.6x, Junior Executive 47% asking 2+ years and paid +21%, entry level 6.3% and
-+1%, clerical support 0.63 against craftsmen 0.08 applications per posting per day (8x), administration manager
-2.14, PMET 73% of MCF postings against 56% of MOM vacancies. The container was removed afterwards.
+exports of the weeks ending 27 Oct and 3 Nov loaded into `metrics` (`clean` and `mart` empty). The tabs showed
+the stored numbers of that day, and the container was removed afterwards. The shortage and barrier numbers have
+changed since with the 7 and 8 Nov rules (below). With both weeks as rebuilt on 8 Nov (21:39 SGT), the tables
+the tabs read hold, for 3 Nov: 1.8% of direct employers' postings are shortage postings, 14 shortage skills (11 of
+them listed on 27 Oct too) and 41 barrier skills (22 of them listed on 27 Oct too), General Ledger not flagged;
+Junior Executive 47% asking 2+ years and paid +21%, entry level 6.3% and +1%, clerical support 0.63 against
+craftsmen 0.08 applications per posting per day (8x), administration manager 2.14, PMET 73% of MCF postings
+against 56% of MOM vacancies.
 
 Tests: `tests/test_dashboard_signals.py` (logic, and offline checks that the views and queries read only
 `metrics` and are parameterised) and `tests/test_integration_dashboard_signals.py` (Postgres, skipped without
@@ -91,10 +94,11 @@ Two rules were tightened after a check of the week ending 3 Nov, and a summary g
 by clearing their weekly_metrics runs, or `python -m metrics.run --week-ending 2026-10-27 2026-11-03`):
 
 - **Shortage reads direct employers only.** Employment agencies (SSIC 78) posted 43% of open postings but 60% of
-  shortage postings; one agency alone made 738 of the 2,255. Shortage share 2.5% -> 1.8%, listed skills 74 -> 41.
+  shortage postings; one agency alone made 738 of the 2,255. Shortage share 2.5% -> 1.8%, listed skills 74 -> 41 (now 14 on 3 Nov, after the 8 Nov generic tags and
+  the shortage lift of at least 1.5).
   The construction skills stay (Tendering, Quantity Surveying, Cost Control, Technical Drawing); Revit, HVAC and
   B2B Sales were agency-driven and drop out.
-- **A barrier skill must also convert below the market.** Barrier skills 81 -> 43: the accounting cluster
+- **A barrier skill must also convert below the market.** Barrier skills 81 -> 43 (now 41, after the 8 Nov generic tags): the accounting cluster
   (General Ledger, QuickBooks, Monthly Closing) is gone, because those postings still get 1.1 to 1.9 times the
   market's applications per view. Site, engineering and service skills remain.
 - **Summary grid** (above): reads across the signals per group, which the four separate skill lists could not.

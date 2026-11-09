@@ -61,23 +61,31 @@ None of them appears in `data/reference/skill_aliases.csv`.
 | Disposition | 584 |
 | Finance | 451 |
 | Cuts | 350 |
+| Foot | 328 |
 | Structural | 236 |
 | Painting | 175 |
 
-## Effect (measured after the rebuild of 8 Nov)
+## Effect (measured when the list was first applied, 8 Nov)
 
-Both weeks were rebuilt from `main` (commit `778014b`) with all checks passing; each run records the 15 tags in
+Both weeks were first rebuilt with the list from `main` (commit `778014b`), then three more times on 8 Nov as other
+rules changed, the last after `97c3f85` (21:39 SGT, all checks passing). Each run records the 16 tags in
 `run_log.thresholds.generic_skill_tags`.
+
+The table below is the list's own effect, measured at that first rebuild with 15 tags (before Foot was added) and
+before the shortage list needed a lift of at least 1.5:
 
 | Week ending | Shortage skills (before -> after) | Barrier skills (before -> after) |
 |---|---|---|
 | 27 Oct | 53 -> 47 | 59 -> 58 |
 | 3 Nov | 41 -> 34 | 43 -> 41 |
 
+With all 16 tags and the lift rule, the shortage lists now hold 25 skills (27 Oct) and 14 (3 Nov); the barrier
+counts are unchanged at 58 and 41.
+
 For 3 Nov the tags that dropped out are Cuts, Disposition, Treatment, Healthcare, Manufacturing, Drawing and
-Construction from shortage, and Painting and Structural from barrier, as expected. Electrical stays on the
-shortage list. The other skills keep the same numbers: each skill is computed on its own, and no postings are
-removed.
+Construction from shortage, and Painting and Structural from barrier, as expected. Electrical stayed on the
+shortage list then, but has been off it since the lift rule (1.21x on 3 Nov, under 1.5). The other skills keep the
+same numbers: each skill is computed on its own, and no postings are removed.
 
 ### New top 10 shortage skills, week ending 3 Nov
 

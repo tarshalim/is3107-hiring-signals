@@ -80,7 +80,7 @@ THRESHOLDS = {
                                      # one bulk poster plus nine with a posting each). skill_salary leaves a skill
                                      # out when one employer posts more than half of its salaried postings
     # employment agencies: the poster's SSIC 2020 code starts with 78 (employment activities). On 3 Nov they posted
-    # 42% of open postings but 60% of the shortage postings (3.6% of theirs against 1.8% for direct employers):
+    # 43% of open postings but 60% of the shortage postings (3.5% of theirs against 1.8% for direct employers):
     # agencies keep evergreen ads up and repost them, which looks like a shortage but is not one. The shortage
     # signal reads direct employers only (posting_week.posted_by_agency)
     "agency_ssic_prefix": "78",
@@ -90,7 +90,7 @@ THRESHOLDS = {
     # technical skills (barrier_skill.is_technical, shortage_skill.is_technical): a SkillsFuture technical skill
     # ('tsc'), or an MCF tag not mapped to SkillsFuture unless it is on this list of traits and attitudes. Critical
     # core skills ('ccs', e.g. Adaptability) are not technical. On 3 Nov commission-sales firms (direct selling,
-    # SSIC 70205 or 47xxx, so not caught as agencies) made 28% of the direct-employer shortage postings and drove
+    # SSIC 70205 or 47xxx, so not caught as agencies) made 29% of the direct-employer shortage postings and drove
     # the soft skills to the top of both lists; the dashboard shows technical skills by default
     "soft_skill_tags": load_soft_skill_tags(),
     # usable monthly salary: below 300 are hourly or daily rates typed into the monthly field (for example $12 to
@@ -128,7 +128,7 @@ THRESHOLDS = {
     "unrealistic_min_reposts": 1,
     "many_apps_percentile": 0.9,     # "many applications" = the P90 of applications per day since posting that week
     "entry_levels": ["Fresh/entry level"],
-    "junior_levels": ["Junior Executive"],   # reported as its own flag: 46% ask 2+ years against 6.6% at entry level
+    "junior_levels": ["Junior Executive"],   # reported as its own flag: 47% ask 2+ years against 6.3% at entry level
     "entry_min_years": 2,
     "exp_max_valid": EXP_MAX,        # the clean layer's cap (30): 32, 50 and 88 years are typing errors
 }
@@ -232,7 +232,7 @@ JOIN clean.dim_job j ON j.job_key = o.job_key
 
 # Each posting's comparison group: the 2-digit SSOC code (e.g. '24', business and administration professionals)
 # when that group has enough open postings this week for a stable P75, else the 1-digit major group (e.g. '2').
-# On 3 Nov: 31 two-digit groups and 6 one-digit fallbacks; 573 of 88,610 postings fell back.
+# On 3 Nov: 31 two-digit groups and 6 one-digit fallbacks; 575 of 88,667 postings fell back.
 BARRIER_GROUP_SQL = """
 UPDATE metrics.posting_week pw
 SET barrier_group = CASE WHEN c.n >= %(barrier_group_min_postings)s THEN left(pw.ssoc_code, 2)
