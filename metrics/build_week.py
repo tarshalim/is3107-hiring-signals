@@ -275,6 +275,10 @@ def many_apps_threshold(cur, p) -> float:
 
 def _build_posting_week(cur, p) -> dict:
     cur.execute(POSTING_WEEK_SQL, p)
+    # Refresh the planner's statistics so they include the rows just inserted. A new week_end_date is not in
+    # them yet, so the planner expected 1 row and re-ran the barrier UPDATEs' per-group aggregate once per
+    # posting (10 Nov: ~0.65 s x 88k postings, about 16 hours). ANALYZE sees this transaction's own rows.
+    cur.execute("ANALYZE metrics.posting_week")
     many = many_apps_threshold(cur, p)
     cur.execute("""
         UPDATE metrics.posting_week
